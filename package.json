@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Automatic retry companion for the Antigravity desktop app",
   "type": "module",
+  "bin": {
+    "retrynaut": "bin/retrynaut.js"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -13,7 +16,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node scripts/check.js"
   },
   "keywords": [
     "antigravity",
