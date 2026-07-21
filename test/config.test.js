@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { defaultConfig, loadConfig, validateConfig } from '../src/config.js'
+import { defaultConfig, loadConfig, purgeConfigDir, validateConfig } from '../src/config.js'
 
 test('default config is conservative and valid', () => {
   const config = defaultConfig()
@@ -39,4 +39,16 @@ test('loads config written by the native release', async (context) => {
     retryDelayMs: 700,
     scanIntervalMs: 300,
   })
+})
+
+test('purge removes only a retrynaut directory', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-purge-'))
+  const appDir = path.join(root, 'retrynaut')
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await writeFile(path.join(root, 'keep.txt'), 'keep')
+  await mkdir(appDir)
+  await writeFile(path.join(appDir, 'config.json'), '{}')
+  await purgeConfigDir(appDir)
+  await assert.rejects(access(appDir), { code: 'ENOENT' })
+  await assert.rejects(purgeConfigDir(root), /refusing to purge/)
 })

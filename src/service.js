@@ -133,6 +133,12 @@ X-GNOME-Autostart-enabled=true
 `
 }
 
+export function renderScheduledCommand(paths, runtime) {
+  return [runtime.nodePath, runtime.cliPath, 'run', '--config', paths.configFile]
+    .map(windowsQuote)
+    .join(' ')
+}
+
 async function installLaunchAgent(paths, runtime) {
   await mkdir(path.dirname(paths.registration), { recursive: true })
   await writeFile(paths.registration, renderLaunchAgent(paths, runtime), { mode: 0o644 })
@@ -142,9 +148,7 @@ async function installLaunchAgent(paths, runtime) {
 }
 
 async function installScheduledTask(paths, runtime) {
-  const taskCommand = [runtime.nodePath, runtime.cliPath, 'run', '--config', paths.configFile]
-    .map(windowsQuote)
-    .join(' ')
+  const taskCommand = renderScheduledCommand(paths, runtime)
   run('schtasks.exe', [
     '/Create', '/F', '/SC', 'ONLOGON', '/RL', 'LIMITED',
     '/TN', windowsTask, '/TR', taskCommand,
