@@ -15,6 +15,8 @@ test('copies a stable runtime out of the npm package', async (context) => {
   const runtime = await loadRuntime(paths)
   assert.equal(runtime.nodePath, '/usr/bin/node')
   assert.equal(runtime.cliPath, paths.runtimeCli)
+  assert.equal(runtime.version, '0.1.0')
+  assert.match(runtime.installedAt, /^\d{4}-\d{2}-\d{2}T/)
   await access(path.join(paths.runtimeDir, 'src', 'retry.js'))
   await access(paths.runtimeCli)
   const packageInfo = JSON.parse(await readFile(path.join(paths.runtimeDir, 'package.json'), 'utf8'))

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { processIsRunning, readPid } from './daemon.js'
+import { agentStatus, stopAgent } from './control.js'
 
 const launchLabel = 'dev.ersync.retrynaut'
 const windowsTask = 'Retrynaut'
@@ -30,18 +30,21 @@ export async function startService(paths, platform = process.platform) {
   } else {
     throw new Error('Retrynaut is not installed')
   }
-  return serviceState(paths, platform)
+  return waitForAgent(paths, platform)
 }
 
 export async function stopService(paths, platform = process.platform) {
   if (platform === 'darwin') {
     runQuiet('launchctl', ['bootout', `${launchDomain()}/${launchLabel}`])
   } else if (platform === 'win32') {
+    await stopAgent(paths)
     runQuiet('schtasks.exe', ['/End', '/TN', windowsTask])
   } else if (await fileExists(paths.systemdUnit) && systemdAvailable()) {
     runQuiet('systemctl', ['--user', 'stop', 'retrynaut.service'])
+  } else {
+    await stopAgent(paths)
   }
-  await stopPid(paths.pidFile)
+  await waitForStopped(paths)
 }
 
 export async function removeService(paths, platform = process.platform) {
@@ -50,6 +53,7 @@ export async function removeService(paths, platform = process.platform) {
     await rm(paths.registration, { force: true })
   } else if (platform === 'win32') {
     runQuiet('schtasks.exe', ['/Delete', '/F', '/TN', windowsTask])
+    await rm(paths.windowsTaskXml, { force: true })
   } else {
     runQuiet('systemctl', ['--user', 'disable', '--now', 'retrynaut.service'])
     await rm(paths.systemdUnit, { force: true })
@@ -67,9 +71,14 @@ export async function serviceState(paths, platform = process.platform) {
   } else {
     installed = await fileExists(paths.systemdUnit) || await fileExists(paths.xdgEntry)
   }
-  const pid = await readPid(paths.pidFile)
-  const running = Boolean(pid && await processIsRunning(pid))
-  return { installed, running, pid, registration: paths.registration }
+  const agent = await agentStatus(paths)
+  return {
+    installed,
+    running: Boolean(agent),
+    pid: agent?.pid,
+    startedAt: agent?.startedAt,
+    registration: paths.registration,
+  }
 }
 
 export function renderLaunchAgent(paths, runtime) {
@@ -115,8 +124,8 @@ Type=simple
 ExecStart=${systemdQuote(runtime.nodePath)} ${systemdQuote(runtime.cliPath)} run --config ${systemdQuote(paths.configFile)}
 Restart=always
 RestartSec=2
-StandardOutput=append:${paths.logFile}
-StandardError=append:${paths.logFile}
+StandardOutput=append:${systemdSpecifierEscape(paths.logFile)}
+StandardError=append:${systemdSpecifierEscape(paths.logFile)}
 
 [Install]
 WantedBy=default.target
@@ -133,10 +142,55 @@ X-GNOME-Autostart-enabled=true
 `
 }
 
-export function renderScheduledCommand(paths, runtime) {
-  return [runtime.nodePath, runtime.cliPath, 'run', '--config', paths.configFile]
+export function renderWindowsTask(paths, runtime, user) {
+  const escape = xmlEscape
+  const argumentsText = [runtime.cliPath, 'run', '--config', paths.configFile]
     .map(windowsQuote)
     .join(' ')
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Retrynaut background agent</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${escape(user)}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${escape(user)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>999</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>${escape(runtime.nodePath)}</Command>
+      <Arguments>${escape(argumentsText)}</Arguments>
+      <WorkingDirectory>${escape(path.win32.dirname(runtime.cliPath))}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+`
 }
 
 async function installLaunchAgent(paths, runtime) {
@@ -144,17 +198,15 @@ async function installLaunchAgent(paths, runtime) {
   await writeFile(paths.registration, renderLaunchAgent(paths, runtime), { mode: 0o644 })
   run('launchctl', ['bootstrap', launchDomain(), paths.registration])
   run('launchctl', ['kickstart', '-k', `${launchDomain()}/${launchLabel}`])
-  return serviceState(paths, 'darwin')
+  return waitForAgent(paths, 'darwin')
 }
 
 async function installScheduledTask(paths, runtime) {
-  const taskCommand = renderScheduledCommand(paths, runtime)
-  run('schtasks.exe', [
-    '/Create', '/F', '/SC', 'ONLOGON', '/RL', 'LIMITED',
-    '/TN', windowsTask, '/TR', taskCommand,
-  ])
+  const user = run('whoami.exe', [])
+  await writeUtf16(paths.windowsTaskXml, renderWindowsTask(paths, runtime, user))
+  run('schtasks.exe', ['/Create', '/F', '/TN', windowsTask, '/XML', paths.windowsTaskXml])
   run('schtasks.exe', ['/Run', '/TN', windowsTask])
-  return serviceState(paths, 'win32')
+  return waitForAgent(paths, 'win32')
 }
 
 async function installLinuxAgent(paths, runtime) {
@@ -169,7 +221,7 @@ async function installLinuxAgent(paths, runtime) {
     await writeFile(paths.xdgEntry, renderXdgEntry(paths, runtime), { mode: 0o644 })
     startDetached(paths, runtime)
   }
-  return serviceState(paths, 'linux')
+  return waitForAgent(paths, 'linux')
 }
 
 function startDetached(paths, runtime) {
@@ -185,25 +237,6 @@ function startDetached(paths, runtime) {
   }
 }
 
-async function stopPid(file) {
-  const pid = await readPid(file)
-  if (!pid || !await processIsRunning(pid)) {
-    await rm(file, { force: true })
-    return
-  }
-  try {
-    process.kill(pid, 'SIGTERM')
-  } catch {
-    await rm(file, { force: true })
-    return
-  }
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (!await processIsRunning(pid)) break
-    await delay(100)
-  }
-  if (!await processIsRunning(pid)) await rm(file, { force: true })
-}
-
 async function readRuntime(paths) {
   try {
     return JSON.parse(await readFile(paths.runtimeFile, 'utf8'))
@@ -211,6 +244,28 @@ async function readRuntime(paths) {
     if (error.code === 'ENOENT') throw new Error('Retrynaut is not installed')
     throw error
   }
+}
+
+async function waitForAgent(paths, platform) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (await agentStatus(paths)) return serviceState(paths, platform)
+    await delay(100)
+  }
+  throw new Error(`background agent did not become healthy; check ${paths.logFile}`)
+}
+
+async function waitForStopped(paths) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (!await agentStatus(paths)) return
+    await delay(100)
+  }
+  throw new Error('background agent did not stop cleanly')
+}
+
+async function writeUtf16(file, contents) {
+  await mkdir(path.dirname(file), { recursive: true })
+  const body = Buffer.from(contents, 'utf16le')
+  await writeFile(file, Buffer.concat([Buffer.from([0xff, 0xfe]), body]), { mode: 0o600 })
 }
 
 function launchDomain() {
@@ -255,7 +310,14 @@ async function fileExists(file) {
 }
 
 function systemdQuote(value) {
-  return `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+  return `"${String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('%', '%%')}"`
+}
+
+function systemdSpecifierEscape(value) {
+  return String(value).replaceAll('%', '%%')
 }
 
 function desktopQuote(value) {
@@ -269,4 +331,13 @@ function desktopQuote(value) {
 
 function windowsQuote(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
 }

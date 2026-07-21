@@ -3,8 +3,8 @@ import test from 'node:test'
 
 import {
   renderLaunchAgent,
-  renderScheduledCommand,
   renderSystemdUnit,
+  renderWindowsTask,
   renderXdgEntry,
 } from '../src/service.js'
 
@@ -13,7 +13,7 @@ const paths = {
   logFile: '/Users/a&b/Library/Application Support/retrynaut/retrynaut.log',
 }
 const runtime = {
-  nodePath: '/Users/a&b/.nvm/node',
+  nodePath: '/Users/a&b/.nvm/node%22',
   cliPath: '/Users/a&b/retrynaut/bin/retrynaut.js',
 }
 
@@ -26,17 +26,21 @@ test('escapes LaunchAgent values', () => {
 test('renders Linux startup entries with the installed runtime', () => {
   const unit = renderSystemdUnit(paths, runtime)
   const desktop = renderXdgEntry(paths, runtime)
-  assert.match(unit, /ExecStart="\/Users\/a&b\/\.nvm\/node"/)
+  assert.match(unit, /ExecStart="\/Users\/a&b\/\.nvm\/node%%22"/)
+  assert.match(unit, /Restart=always/)
   assert.match(desktop, /Terminal=false/)
 })
 
-test('quotes every Windows task argument', () => {
-  const command = renderScheduledCommand({ configFile: 'C:\\User Data\\config.json' }, {
+test('renders a least-privilege Windows task that restarts after failure', () => {
+  const task = renderWindowsTask({ configFile: 'C:\\User & Data\\config.json' }, {
     nodePath: 'C:\\Program Files\\nodejs\\node.exe',
-    cliPath: 'C:\\User Data\\retrynaut.js',
-  })
-  assert.equal(
-    command,
-    '"C:\\Program Files\\nodejs\\node.exe" "C:\\User Data\\retrynaut.js" "run" "--config" "C:\\User Data\\config.json"',
-  )
+    cliPath: 'C:\\User & Data\\runtime\\bin\\retrynaut.js',
+  }, 'WORKGROUP\\A&B')
+
+  assert.match(task, /<RunLevel>LeastPrivilege<\/RunLevel>/)
+  assert.match(task, /<Hidden>true<\/Hidden>/)
+  assert.match(task, /<RestartOnFailure>[\s\S]*<Count>999<\/Count>/)
+  assert.match(task, /WORKGROUP\\A&amp;B/)
+  assert.match(task, /C:\\Program Files\\nodejs\\node\.exe/)
+  assert.match(task, /C:\\User &amp; Data\\runtime\\bin/)
 })

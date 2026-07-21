@@ -20,20 +20,23 @@ export function isAntigravityPage(target) {
 }
 
 export async function runController({ findPort, script, signal, logger = console, verbose = false }) {
-  const active = new Map()
+  let active
+  const clickBudget = createClickBudget()
 
   while (!signal.aborted) {
     try {
       const { port } = await findPort()
       const targets = await listTargets(port, signal)
-      for (const target of targets) {
-        if (!isAntigravityPage(target) || active.has(target.id)) continue
-        const session = holdSession(target, script, signal, () => {
+      const target = targets.find(isAntigravityPage)
+      if (target && !active) {
+        const promise = holdSession(target, script, clickBudget, signal, () => {
           logger.log(`attached to Antigravity page ${target.id}`)
         }).catch((error) => {
           if (verbose && !signal.aborted) logger.log(`target ${target.id} disconnected: ${error.message}`)
-        }).finally(() => active.delete(target.id))
-        active.set(target.id, session)
+        }).finally(() => {
+          if (active?.id === target.id) active = undefined
+        })
+        active = { id: target.id, promise }
       }
     } catch (error) {
       if (verbose && !signal.aborted) logger.log(`waiting for Antigravity: ${error.message}`)
@@ -46,13 +49,13 @@ export async function runController({ findPort, script, signal, logger = console
     }
   }
 
-  await Promise.allSettled(active.values())
+  if (active) await Promise.allSettled([active.promise])
 }
 
 export async function queryStatus(target, signal) {
   const session = await CDPSession.connect(target.webSocketDebuggerUrl, signal)
   try {
-    const result = await session.call('Runtime.evaluate', {
+    const result = await evaluate(session, {
       expression: 'globalThis.retrynaut?.status?.() ?? null',
       returnByValue: true,
     })
@@ -69,29 +72,177 @@ export async function pauseControllers(port, signal) {
   let paused = 0
   for (const target of targets) {
     if (!isAntigravityPage(target)) continue
+    let session
     try {
-      const session = await CDPSession.connect(target.webSocketDebuggerUrl, signal)
-      await session.call('Runtime.evaluate', { expression: 'globalThis.retrynaut?.stop?.()' })
-      session.close()
+      session = await CDPSession.connect(target.webSocketDebuggerUrl, signal)
+      await evaluate(session, { expression: 'globalThis.retrynaut?.stop?.()' })
       paused += 1
     } catch {
       // A page can disappear while Antigravity is reloading.
+    } finally {
+      session?.close()
     }
   }
   return paused
 }
 
-async function holdSession(target, script, signal, ready) {
-  const session = await CDPSession.connect(target.webSocketDebuggerUrl, signal)
+async function holdSession(target, script, clickBudget, signal, ready) {
+  const session = await CDPSession.connect(target.webSocketDebuggerUrl)
+  let mainFrameId
+  let mainContextId
+  let onAbort = () => {}
+  const contexts = new Map()
+  const injections = new Set()
+
+  const inject = (contextId) => {
+    let injection
+    injection = (async () => {
+      const existing = await evaluate(session, {
+        expression: 'globalThis.retrynaut?.history?.() ?? []',
+        returnByValue: true,
+        ...(contextId ? { contextId } : {}),
+      })
+      clickBudget.merge(existing?.result?.value)
+      const seed = JSON.stringify(clickBudget.snapshot())
+      await evaluate(session, {
+        expression: `globalThis.__retrynautClickSeed=${seed};\n${script}`,
+        ...(contextId ? { contextId } : {}),
+      })
+    })().finally(() => injections.delete(injection))
+    injections.add(injection)
+    return injection
+  }
+
+  const removeContextListener = session.on('Runtime.executionContextDestroyed', ({ executionContextId }) => {
+    for (const [frameId, contextId] of contexts) {
+      if (contextId === executionContextId) contexts.delete(frameId)
+    }
+    if (mainContextId === executionContextId) mainContextId = undefined
+  })
+  const createContextListener = session.on('Runtime.executionContextCreated', ({ context }) => {
+    const frameId = context.auxData?.frameId
+    if (!frameId || !context.auxData?.isDefault) return
+    contexts.set(frameId, context.id)
+    if (frameId === mainFrameId) {
+      mainContextId = context.id
+      inject(context.id).catch(() => session.close())
+    }
+  })
+  const frameListener = session.on('Page.frameNavigated', ({ frame }) => {
+    if (frame.parentId) return
+    mainFrameId = frame.id
+    mainContextId = contexts.get(frame.id)
+    if (mainContextId) inject(mainContextId).catch(() => session.close())
+  })
+  const clearContextsListener = session.on('Runtime.executionContextsCleared', () => {
+    contexts.clear()
+    mainContextId = undefined
+  })
+  const bindingListener = session.on('Runtime.bindingCalled', ({ name, payload, executionContextId }) => {
+    if (name === '__retrynautReportClick'
+        && (!mainContextId || executionContextId === mainContextId)) {
+      clickBudget.record(Number(payload))
+    }
+  })
+
   try {
     await session.call('Page.enable')
-    await session.call('Page.addScriptToEvaluateOnNewDocument', { source: script })
-    await session.call('Runtime.evaluate', { expression: script })
+    await session.call('Runtime.enable')
+    await session.call('Runtime.addBinding', { name: '__retrynautReportClick' })
+    const tree = await session.call('Page.getFrameTree')
+    mainFrameId = tree.frameTree.frame.id
+    mainContextId = contexts.get(mainFrameId)
+    await inject(mainContextId)
     ready()
-    await session.waitForClose()
+
+    const heartbeat = keepAlive(session, signal, () => mainContextId)
+    let resolveAbort
+    onAbort = () => resolveAbort('aborted')
+    const aborted = new Promise((resolve) => {
+      resolveAbort = resolve
+      if (signal.aborted) resolve('aborted')
+      else signal.addEventListener('abort', onAbort, { once: true })
+    })
+    const outcome = await Promise.race([
+      session.waitForClose().then(() => 'closed'),
+      heartbeat.then(
+        () => 'heartbeat-ended',
+        (error) => {
+          if (signal.aborted) return 'aborted'
+          throw error
+        },
+      ),
+      aborted,
+    ])
+    if (outcome === 'aborted') {
+      try {
+        await evaluate(session, {
+          expression: 'globalThis.retrynaut?.stop?.()',
+          ...(mainContextId ? { contextId: mainContextId } : {}),
+        })
+      } catch {
+        // The page may already be closing.
+      }
+    }
   } finally {
+    signal.removeEventListener('abort', onAbort)
+    removeContextListener()
+    createContextListener()
+    frameListener()
+    clearContextsListener()
+    bindingListener()
+    await Promise.allSettled(injections)
     session.close()
   }
+}
+
+function createClickBudget() {
+  const clicks = []
+  const known = new Set()
+  const prune = (now = Date.now()) => {
+    const cutoff = now - 60_000
+    while (clicks.length && clicks[0] <= cutoff) known.delete(clicks.shift())
+  }
+  return {
+    record(now = Date.now()) {
+      const current = Date.now()
+      prune(current)
+      if (!Number.isFinite(now) || now <= current - 60_000 || now > current + 5_000
+          || known.has(now)) return
+      known.add(now)
+      clicks.push(now)
+      clicks.sort((left, right) => left - right)
+    },
+    merge(values) {
+      if (!Array.isArray(values)) return
+      for (const value of values) this.record(value)
+    },
+    snapshot(now = Date.now()) {
+      prune(now)
+      return [...clicks]
+    },
+  }
+}
+
+async function keepAlive(session, signal, contextId) {
+  while (!signal.aborted) {
+    await delay(3_000, undefined, { signal })
+    await evaluate(session, {
+      expression: 'globalThis.retrynaut?.heartbeat?.()',
+      ...(contextId() ? { contextId: contextId() } : {}),
+    })
+  }
+}
+
+async function evaluate(session, params) {
+  const result = await session.call('Runtime.evaluate', params)
+  if (result?.exceptionDetails) {
+    const message = result.exceptionDetails.exception?.description
+      || result.exceptionDetails.text
+      || 'JavaScript evaluation failed'
+    throw new Error(message)
+  }
+  return result
 }
 
 class CDPSession {
@@ -141,6 +292,9 @@ class CDPSession {
   }
 
   call(method, params) {
+    if (this.didClose || this.socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('CDP session is closed'))
+    }
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -156,6 +310,13 @@ class CDPSession {
     return this.closed
   }
 
+  on(method, listener) {
+    if (!this.listeners) this.listeners = new Map()
+    if (!this.listeners.has(method)) this.listeners.set(method, new Set())
+    this.listeners.get(method).add(listener)
+    return () => this.listeners.get(method)?.delete(listener)
+  }
+
   close() {
     this.signal?.removeEventListener('abort', this.abort)
     if (this.socket.readyState < WebSocket.CLOSING) this.socket.close()
@@ -169,7 +330,17 @@ class CDPSession {
     } catch {
       return
     }
-    if (!message.id || !this.pending.has(message.id)) return
+    if (!message.id) {
+      for (const listener of this.listeners?.get(message.method) || []) {
+        try {
+          listener(message.params || {})
+        } catch {
+          // Event listeners cannot break the CDP message loop.
+        }
+      }
+      return
+    }
+    if (!this.pending.has(message.id)) return
     const pending = this.pending.get(message.id)
     this.pending.delete(message.id)
     clearTimeout(pending.timer)

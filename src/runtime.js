@@ -12,14 +12,17 @@ export async function installRuntime(paths, nodePath = process.execPath, sourceR
   await cp(path.join(sourceRoot, 'src'), path.join(temporary, 'src'), { recursive: true })
   await cp(path.join(sourceRoot, 'bin'), path.join(temporary, 'bin'), { recursive: true })
   await cp(path.join(sourceRoot, 'package.json'), path.join(temporary, 'package.json'))
+  const packageInfo = JSON.parse(await readFile(path.join(sourceRoot, 'package.json'), 'utf8'))
   await rm(paths.runtimeDir, { recursive: true, force: true })
   await rename(temporary, paths.runtimeDir)
+  if (paths.pidFile) await rm(paths.pidFile, { force: true })
   await writeFile(paths.runtimeFile, `${JSON.stringify({
+    version: packageInfo.version,
     nodePath,
     cliPath: paths.runtimeCli,
     installedAt: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 })
-  return { nodePath, cliPath: paths.runtimeCli }
+  return { version: packageInfo.version, nodePath, cliPath: paths.runtimeCli }
 }
 
 export async function loadRuntime(paths) {

@@ -1,68 +1,57 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
 import { runController } from './cdp.js'
 import { loadConfig } from './config.js'
+import { createControlServer } from './control.js'
 import { findPort } from './discovery.js'
 import { buildScript } from './inject.js'
 
 export async function runDaemon({ paths, configFile, portFile, verbose = false }) {
-  await claimPid(paths.pidFile)
+  await mkdir(path.dirname(paths.logFile), { recursive: true })
+  const log = createWriteStream(paths.logFile, { flags: 'a', mode: 0o600 })
+  const startedAt = new Date().toISOString()
+  const logger = {
+    log(message) {
+      log.write(`${new Date().toISOString()} ${message}\n`)
+      if (verbose) console.log(message)
+    },
+  }
+  const controller = new AbortController()
   let stop
+  let control
   try {
     const config = await loadConfig(configFile)
     const script = buildScript(config)
-    const controller = new AbortController()
     stop = () => controller.abort()
     process.once('SIGINT', stop)
     process.once('SIGTERM', stop)
+    control = await createControlServer(paths, {
+      status: () => ({ pid: process.pid, startedAt }),
+      stop: () => {
+        setImmediate(stop)
+        return { stopping: true }
+      },
+    })
 
-    console.log(`starting (mode=${config.mode}, max=${config.maxRetriesPerMinute}/min)`)
+    logger.log(`starting (mode=${config.mode}, max=${config.maxRetriesPerMinute}/min)`)
     await runController({
       findPort: () => findPort(portFile),
       script,
       signal: controller.signal,
+      logger,
       verbose,
     })
+  } catch (error) {
+    logger.log(`stopped with error: ${error.message}`)
+    throw error
   } finally {
     if (stop) {
       process.removeListener('SIGINT', stop)
       process.removeListener('SIGTERM', stop)
     }
-    await releasePid(paths.pidFile)
+    await control?.close()
+    await new Promise((resolve) => log.end(resolve))
   }
-}
-
-export async function processIsRunning(pid) {
-  if (!Number.isInteger(pid) || pid < 1) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === 'EPERM'
-  }
-}
-
-export async function readPid(file) {
-  try {
-    const value = Number((await readFile(file, 'utf8')).trim())
-    return Number.isInteger(value) && value > 0 ? value : undefined
-  } catch (error) {
-    if (error.code === 'ENOENT') return undefined
-    throw error
-  }
-}
-
-async function claimPid(file) {
-  const existing = await readPid(file)
-  if (existing && existing !== process.pid && await processIsRunning(existing)) {
-    throw new Error(`Retrynaut is already running with pid ${existing}`)
-  }
-  await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, `${process.pid}\n`, { mode: 0o600 })
-}
-
-async function releasePid(file) {
-  const current = await readPid(file)
-  if (current === process.pid) await rm(file, { force: true })
 }

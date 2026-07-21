@@ -6,7 +6,7 @@ import { loadConfig, purgeConfigDir, saveConfig } from './config.js'
 import { runDaemon } from './daemon.js'
 import { findPort, portFiles, readPort } from './discovery.js'
 import { appPaths } from './paths.js'
-import { installRuntime } from './runtime.js'
+import { installRuntime, loadRuntime } from './runtime.js'
 import { installService, removeService, serviceState, startService, stopService } from './service.js'
 
 const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
@@ -92,8 +92,19 @@ async function statusCommand(args) {
   parseArgs({ args, strict: true })
   const paths = appPaths()
   const state = await serviceState(paths)
+  console.log(`CLI version: ${packageInfo.version}`)
   console.log(`installed: ${yesNo(state.installed)}`)
   console.log(`background agent: ${state.running ? `running (pid ${state.pid})` : 'stopped'}`)
+  if (state.installed) {
+    try {
+      const runtime = await loadRuntime(paths)
+      console.log(`installed version: ${runtime.version || 'unknown'}`)
+      console.log(`installed node: ${runtime.nodePath}`)
+      console.log(`installed at: ${runtime.installedAt || 'unknown'}`)
+    } catch (error) {
+      console.log(`installed runtime: ${error.message}`)
+    }
+  }
 
   try {
     const { port } = await findPort()
@@ -123,6 +134,7 @@ async function installCommand(args) {
   const state = await installService(paths, runtime)
   console.log(`installed: ${paths.runtimeDir}`)
   console.log(`startup: ${state.registration}`)
+  console.log(`background agent: running (pid ${state.pid})`)
   console.log(`mode=${next.mode} max=${next.maxRetriesPerMinute}/min`)
 }
 
@@ -144,14 +156,14 @@ async function configureCommand(args) {
 async function startCommand(args) {
   parseArgs({ args, strict: true })
   const state = await startService(appPaths())
-  console.log(`Retrynaut started${state.pid ? ` (pid ${state.pid})` : ''}.`)
+  console.log(`Retrynaut started (pid ${state.pid}).`)
 }
 
 async function stopCommand(args) {
   parseArgs({ args, strict: true })
   await pauseCurrentController()
   await stopService(appPaths())
-  console.log('Retrynaut stopped. It will start again at the next sign-in.')
+  console.log('Retrynaut stopped. Automatic startup remains enabled.')
 }
 
 async function uninstallCommand(args) {

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 1
+  const VERSION = 2
   const CONFIG = __RETRYNAUT_CONFIG__
   const previous = globalThis.retrynaut
 
@@ -31,13 +31,20 @@
     250,
     Math.ceil(clickWindowMs / CONFIG.maxRetriesPerMinute),
   )
-  const recentClicks = []
+  const seededClicks = Array.isArray(globalThis.__retrynautClickSeed)
+    ? globalThis.__retrynautClickSeed.filter((value) => Number.isFinite(value))
+    : []
+  delete globalThis.__retrynautClickSeed
+  const recentClicks = seededClicks
   const scheduledButtons = new WeakSet()
+  const leaseDurationMs = 10_000
 
   let running = false
   let observer
   let scanTimer
   let fallbackTimer
+  let leaseTimer
+  let leaseUntil = 0
   let lastClickAt = 0
   let totalClicks = 0
   let retryClicks = 0
@@ -126,6 +133,7 @@
 
       lastClickAt = now
       recentClicks.push(now)
+      globalThis.__retrynautReportClick?.(String(now))
       totalClicks += 1
       if (action.kind === 'retry') retryClicks += 1
       else continueClicks += 1
@@ -142,9 +150,14 @@
     scanTimer = setTimeout(scan, 120)
   }
 
+  function renewLease() {
+    leaseUntil = Date.now() + leaseDurationMs
+  }
+
   const controller = {
     version: VERSION,
     start() {
+      renewLease()
       if (running) return this.status()
       running = true
       observer = new MutationObserver(scheduleScan)
@@ -156,6 +169,9 @@
         attributeFilter: ['disabled', 'aria-disabled'],
       })
       fallbackTimer = setInterval(scheduleScan, CONFIG.scanIntervalMs)
+      leaseTimer = setInterval(() => {
+        if (Date.now() > leaseUntil) this.stop()
+      }, 1_000)
       scheduleScan()
       console.info(`[Retrynaut] Started in ${CONFIG.mode} mode.`)
       return this.status()
@@ -166,8 +182,14 @@
       observer = undefined
       clearTimeout(scanTimer)
       clearInterval(fallbackTimer)
+      clearInterval(leaseTimer)
       scanTimer = undefined
       fallbackTimer = undefined
+      leaseTimer = undefined
+      return this.status()
+    },
+    heartbeat() {
+      renewLease()
       return this.status()
     },
     reset() {
@@ -177,6 +199,10 @@
     },
     sameConfig(other) {
       return JSON.stringify(CONFIG) === JSON.stringify(other)
+    },
+    history() {
+      pruneClicks()
+      return [...recentClicks]
     },
     status() {
       pruneClicks()
@@ -191,6 +217,7 @@
         maxRetriesPerMinute: CONFIG.maxRetriesPerMinute,
         minimumClickIntervalMs,
         scanCount,
+        leaseUntil,
       }
     },
   }
