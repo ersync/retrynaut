@@ -1,0 +1,33 @@
+{
+  "name": "retrynaut",
+  "version": "0.1.0",
+  "description": "Automatic retry companion for the Antigravity desktop app",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "antigravity",
+    "retry",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Emad Rahimi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ersync/retrynaut.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ersync/retrynaut/issues"
+  },
+  "homepage": "https://github.com/ersync/retrynaut#readme"
+}
