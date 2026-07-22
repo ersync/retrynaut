@@ -25,7 +25,7 @@ npx -y retrynaut@latest install
 
 ## How It Works
 
-- Connects to Antigravity's debugging port (`127.0.0.1`) and injects a small UI watcher
+- Connects to Antigravity's debugging port (`127.0.0.1`) and injects a [small UI watcher](src/retry.js)
 - Registers as a native background service so it survives reboots
 - Only clicks visible, enabled `Retry` or `Try again` buttons next to a recognized error
 - Watches one Antigravity window at a time
