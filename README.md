@@ -1,4 +1,8 @@
-# Retrynaut
+<p align="center">
+  <img src="assets/retrynaut-terminal.webp" alt="Retrynaut connected to Antigravity with automatic retry enabled" width="100%">
+</p>
+
+<h1 align="center">Retrynaut</h1>
 
 Retrynaut is a local background agent that automatically clicks Retry when
 Claude runs fail with `high-traffic` errors in the Antigravity 2.x desktop app.
