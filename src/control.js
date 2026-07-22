@@ -88,7 +88,7 @@ export async function requestControl(paths, command, timeoutMs = 1_000) {
 
 export async function agentStatus(paths) {
   try {
-    return await requestControl(paths, 'status', 500)
+    return await requestControl(paths, 'status', 2_000)
   } catch {
     return undefined
   }

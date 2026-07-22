@@ -36,7 +36,6 @@ test('loads config written by the native release', async (context) => {
     mode: 'agent-errors',
     autoContinue: true,
     requireFocus: true,
-    retryDelayMs: 700,
     scanIntervalMs: 300,
   })
 })

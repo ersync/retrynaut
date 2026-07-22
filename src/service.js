@@ -80,6 +80,7 @@ export async function serviceState(paths, platform = process.platform) {
     running: Boolean(agent),
     pid: agent?.pid,
     startedAt: agent?.startedAt,
+    retry: agent?.retry,
     registration: paths.registration,
   }
 }

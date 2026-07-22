@@ -2,7 +2,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 
-import { runController } from './cdp.js'
+import { createClickBudget, runController } from './cdp.js'
 import { loadConfig } from './config.js'
 import { createControlServer } from './control.js'
 import { findPort } from './discovery.js'
@@ -24,24 +24,26 @@ export async function runDaemon({ paths, configFile, portFile, verbose = false }
   try {
     const config = await loadConfig(configFile)
     const script = buildScript(config)
+    const clickBudget = createClickBudget(config.maxRetriesPerMinute)
     stop = () => controller.abort()
     process.once('SIGINT', stop)
     process.once('SIGTERM', stop)
     control = await createControlServer(paths, {
-      status: () => ({ pid: process.pid, startedAt }),
+      status: () => ({ pid: process.pid, startedAt, retry: clickBudget.status() }),
       stop: () => {
         setImmediate(stop)
         return { stopping: true }
       },
     })
 
-    logger.log(`starting (mode=${config.mode}, max=${config.maxRetriesPerMinute}/min)`)
+    logger.log(`starting (mode=${config.mode}, breaker=${config.maxRetriesPerMinute}/60s)`)
     await runController({
       findPort: () => findPort(portFile),
       script,
       signal: controller.signal,
       logger,
       verbose,
+      clickBudget,
     })
   } catch (error) {
     logger.log(`stopped with error: ${error.message}`)

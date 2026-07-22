@@ -1,7 +1,14 @@
 import { output } from './output.js'
 
 export function buildStatus({ config, controller, pageCount, paths, runtime, runtimeError, state }, cliVersion) {
-  const connected = Boolean(state.running && controller?.running)
+  const connected = Boolean(state.running && controller)
+  const limit = controller?.maxRetriesPerMinute
+    || state.retry?.limit
+    || config.maxRetriesPerMinute
+  const clicksLastMinute = controller?.clicksLastMinute
+    ?? state.retry?.clicksLastMinute
+    ?? 0
+  const tripped = controller?.tripped ?? state.retry?.tripped ?? false
   return {
     cliVersion,
     agent: {
@@ -15,7 +22,7 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
     },
     config: {
       mode: controller?.mode || config.mode,
-      maxClicksPerMinute: controller?.maxRetriesPerMinute || config.maxRetriesPerMinute,
+      maxClicksPerMinute: limit,
       autoContinue: config.autoContinue,
       requireFocus: config.requireFocus,
     },
@@ -25,6 +32,11 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
       continueClicks: controller.continueClicks,
       clicksLastMinute: controller.clicksLastMinute,
     } : null,
+    circuitBreaker: {
+      tripped,
+      clicksLastMinute,
+      limit,
+    },
     installation: state.installed ? {
       version: runtime?.version || null,
       installedAt: runtime?.installedAt || null,
@@ -35,6 +47,7 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
     } : null,
     diagnostics: controller ? {
       controllerVersion: controller.version,
+      controllerRunning: controller.running,
       scanCount: controller.scanCount,
       minimumClickIntervalMs: controller.minimumClickIntervalMs,
       leaseUntil: controller.leaseUntil,
@@ -66,7 +79,11 @@ export function printStatus(status, verbose) {
     rows.push(
       ['Mode', modeLabel(status.config.mode)],
       ['Auto-continue', status.config.autoContinue ? output.green('Enabled') : 'Disabled'],
-      ['Click limit', `${status.config.maxClicksPerMinute} per minute`],
+      ['Circuit breaker', status.circuitBreaker.tripped
+        ? output.yellow('Cooling down')
+        : output.green(
+          `Ready · ${status.circuitBreaker.clicksLastMinute}/${status.circuitBreaker.limit} clicks in 60 sec`,
+        )],
     )
   }
   output.rows(rows)
@@ -105,13 +122,17 @@ export function printStatus(status, verbose) {
     output.section('Diagnostics')
     output.rows([
       ['Controller', status.diagnostics.controllerVersion],
+      ['Controller state', status.diagnostics.controllerRunning ? 'Running' : 'Stopped'],
       ['Scans', status.diagnostics.scanCount],
       ['Minimum interval', `${status.diagnostics.minimumClickIntervalMs} ms`],
       ['Lease until', formatDate(status.diagnostics.leaseUntil)],
     ])
   }
 
-  if (!status.agent.installed) {
+  if (status.circuitBreaker.tripped) {
+    output.blank()
+    output.warning('Retry limit reached. Retrying resumes automatically.')
+  } else if (!status.agent.installed) {
     output.blank()
     output.warning('Run `retrynaut install` to enable background retries.')
   } else if (!status.agent.running) {

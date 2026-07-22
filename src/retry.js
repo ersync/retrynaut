@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 3
+  const VERSION = 5
   const CONFIG = __RETRYNAUT_CONFIG__
   const previous = globalThis.retrynaut
 
@@ -27,26 +27,31 @@
       : retryPatterns
 
   const clickWindowMs = 60_000
-  const minimumClickIntervalMs = Math.max(
-    250,
-    Math.ceil(clickWindowMs / CONFIG.maxRetriesPerMinute),
-  )
-  const seededClicks = Array.isArray(globalThis.__retrynautClickSeed)
-    ? globalThis.__retrynautClickSeed.filter((value) => Number.isFinite(value))
-    : []
+  const minimumClickIntervalMs = 500
+  const seed = globalThis.__retrynautStateSeed
+  const legacySeed = globalThis.__retrynautClickSeed
+  const seededClicks = (Array.isArray(seed?.clicks)
+    ? seed.clicks.filter((value) => Number.isFinite(value))
+    : Array.isArray(legacySeed)
+      ? legacySeed.filter((value) => Number.isFinite(value))
+      : [])
+    .filter((value) => value > Date.now() - clickWindowMs)
+    .sort((left, right) => left - right)
+  delete globalThis.__retrynautStateSeed
   delete globalThis.__retrynautClickSeed
   const recentClicks = seededClicks
-  const scheduledButtons = new WeakSet()
   const leaseDurationMs = 10_000
 
   let running = false
+  let tripped = recentClicks.length >= CONFIG.maxRetriesPerMinute
   let observer
   let scanTimer
   let fallbackTimer
   let leaseTimer
   let leaseUntil = 0
   let stoppedByLease = false
-  let lastClickAt = 0
+  let stoppedByLimit = false
+  let lastClickAt = recentClicks.at(-1) || 0
   let totalClicks = 0
   let retryClicks = 0
   let continueClicks = 0
@@ -112,11 +117,13 @@
   function pruneClicks(now = Date.now()) {
     const cutoff = now - clickWindowMs
     while (recentClicks.length && recentClicks[0] <= cutoff) recentClicks.shift()
+    if (tripped && recentClicks.length < CONFIG.maxRetriesPerMinute) tripped = false
   }
 
   function canClick(now = Date.now()) {
     pruneClicks(now)
-    return recentClicks.length < CONFIG.maxRetriesPerMinute
+    return !tripped
+      && recentClicks.length < CONFIG.maxRetriesPerMinute
       && now - lastClickAt >= minimumClickIntervalMs
   }
 
@@ -143,30 +150,31 @@
     if (!running || (CONFIG.requireFocus && !document.hasFocus()) || !canClick()) return
 
     const action = findAction()
-    if (!action || scheduledButtons.has(action.button)) return
-    scheduledButtons.add(action.button)
+    if (!action) return
 
-    setTimeout(() => {
-      scheduledButtons.delete(action.button)
-      const now = Date.now()
-      if (!running || !action.button.isConnected || !isVisible(action.button)
-          || !isEnabled(action.button) || !canClick(now)) return
+    const now = Date.now()
+    if (!running || !action.button.isConnected || !isVisible(action.button)
+        || !isEnabled(action.button) || !canClick(now)) return
 
-      const current = findAction()
-      if (!current || current.button !== action.button) return
+    lastClickAt = now
+    recentClicks.push(now)
+    globalThis.__retrynautReportClick?.(String(now))
+    totalClicks += 1
+    if (action.kind === 'retry') retryClicks += 1
+    else continueClicks += 1
+    console.info(
+      `[Retrynaut] ${action.kind} #${totalClicks}`
+      + ` (${recentClicks.length}/${CONFIG.maxRetriesPerMinute} this minute, ${action.pattern.name}).`,
+    )
+    action.button.click()
 
-      lastClickAt = now
-      recentClicks.push(now)
-      globalThis.__retrynautReportClick?.(String(now))
-      totalClicks += 1
-      if (action.kind === 'retry') retryClicks += 1
-      else continueClicks += 1
-      console.info(
-        `[Retrynaut] ${action.kind} #${totalClicks}`
-        + ` (${recentClicks.length}/${CONFIG.maxRetriesPerMinute} this minute, ${action.pattern.name}).`,
+    if (recentClicks.length >= CONFIG.maxRetriesPerMinute) {
+      tripped = true
+      console.warn(
+        `[Retrynaut] Circuit breaker tripped after ${recentClicks.length} clicks in 60 seconds.`,
       )
-      action.button.click()
-    }, CONFIG.retryDelayMs)
+      stopController('circuit-breaker')
+    }
   }
 
   function scheduleScan() {
@@ -180,6 +188,7 @@
 
   function stopController(reason) {
     stoppedByLease = reason === 'lease'
+    stoppedByLimit = reason === 'circuit-breaker'
     running = false
     observer?.disconnect()
     observer = undefined
@@ -197,6 +206,9 @@
     start() {
       renewLease()
       stoppedByLease = false
+      pruneClicks()
+      if (tripped) return this.status()
+      stoppedByLimit = false
       if (running) return this.status()
       running = true
       observer = new MutationObserver(scheduleScan)
@@ -220,12 +232,9 @@
     },
     heartbeat() {
       renewLease()
+      pruneClicks()
+      if (stoppedByLimit && !tripped) return this.start()
       if (stoppedByLease) return this.start()
-      return this.status()
-    },
-    reset() {
-      recentClicks.length = 0
-      lastClickAt = 0
       return this.status()
     },
     sameConfig(other) {
@@ -240,12 +249,16 @@
       return {
         version: VERSION,
         running,
+        tripped,
         mode: CONFIG.mode,
         totalClicks,
         retryClicks,
         continueClicks,
         clicksLastMinute: recentClicks.length,
         maxRetriesPerMinute: CONFIG.maxRetriesPerMinute,
+        clicksRemaining: tripped
+          ? 0
+          : Math.max(0, CONFIG.maxRetriesPerMinute - recentClicks.length),
         minimumClickIntervalMs,
         scanCount,
         leaseUntil,

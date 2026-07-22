@@ -8,7 +8,7 @@ import { buildScript } from '../src/inject.js'
 test('clicks an exact Retry button beside a high-traffic error', () => {
   const button = actionButton('Retry', 'Model unavailable due to high traffic Retry')
   const page = runPage([button])
-  page.clock.tick(700)
+  page.clock.tick(300)
   assert.equal(button.clicks, 1)
   assert.equal(page.reports.length, 1)
 })
@@ -16,8 +16,8 @@ test('clicks an exact Retry button beside a high-traffic error', () => {
 test('matches the current high-traffic article when the Retry panel is separate', () => {
   const button = actionButton('Retry', 'Agent terminated due to error Retry')
   const currentError = article('Our servers are experiencing high traffic right now')
-  const page = runPage([button], {}, [], [currentError])
-  page.clock.tick(700)
+  const page = runPage([button], {}, { clicks: [], tripped: false }, [currentError])
+  page.clock.tick(300)
   assert.equal(button.clicks, 1)
 })
 
@@ -25,7 +25,7 @@ test('does not use an old high-traffic article for a different current error', (
   const button = actionButton('Retry', 'Agent terminated due to error Retry')
   const oldError = article('High traffic', { top: -200, bottom: -100 })
   const currentError = article('Authentication failed')
-  const page = runPage([button], {}, [], [oldError, currentError])
+  const page = runPage([button], {}, { clicks: [], tripped: false }, [oldError, currentError])
   page.clock.tick(700)
   assert.equal(button.clicks, 0)
 })
@@ -47,7 +47,7 @@ test('keeps broader agent errors opt-in', () => {
 
   const optedInButton = actionButton('Retry', 'Agent execution terminated due to error Retry')
   const optedInPage = runPage([optedInButton], { mode: 'agent-errors' })
-  optedInPage.clock.tick(700)
+  optedInPage.clock.tick(300)
   assert.equal(optedInButton.clicks, 1)
 })
 
@@ -56,7 +56,7 @@ test('replaces the active controller when configuration changes', () => {
   const page = runPage([button])
   const first = page.context.retrynaut
   vm.runInNewContext(buildScript({ ...defaultConfig(), mode: 'agent-errors' }), page.context)
-  page.clock.tick(700)
+  page.clock.tick(300)
   assert.notEqual(page.context.retrynaut, first)
   assert.equal(first.status().running, false)
   assert.equal(button.clicks, 1)
@@ -65,7 +65,7 @@ test('replaces the active controller when configuration changes', () => {
 test('cancels a pending click when stopped', () => {
   const button = actionButton('Retry', 'High traffic Retry')
   const page = runPage([button])
-  page.clock.tick(200)
+  page.clock.tick(50)
   page.context.retrynaut.stop()
   page.clock.tick(1_000)
   assert.equal(button.clicks, 0)
@@ -87,26 +87,48 @@ test('does not undo an intentional stop when a heartbeat arrives', () => {
   assert.equal(page.context.retrynaut.status().running, false)
 })
 
-test('enforces the configured ceiling and carries it into a fresh context', () => {
+test('retries in a burst instead of pacing clicks across the minute', () => {
   const button = actionButton('Retry', 'High traffic Retry')
   const page = runPage([button], {
-    maxRetriesPerMinute: 120,
-    retryDelayMs: 0,
+    maxRetriesPerMinute: 20,
     scanIntervalMs: 100,
   })
   page.clock.setInterval(() => page.context.retrynaut.heartbeat(), 3_000)
-  page.clock.tick(60_000)
-  assert.ok(button.clicks > 0)
-  assert.ok(button.clicks <= 120)
+  page.clock.tick(1_800)
+  assert.ok(button.clicks >= 3)
+  assert.equal(page.context.retrynaut.status().tripped, false)
+})
 
+test('trips at the rolling click limit and resumes after the window clears', () => {
+  const button = actionButton('Retry', 'High traffic Retry')
+  const page = runPage([button], {
+    maxRetriesPerMinute: 3,
+    scanIntervalMs: 100,
+  })
+  page.clock.tick(2_000)
+  assert.equal(button.clicks, 3)
+  assert.equal(page.context.retrynaut.status().tripped, true)
+  assert.equal(page.context.retrynaut.status().running, false)
+
+  page.clock.tick(60_000)
+  page.context.retrynaut.heartbeat()
+  page.clock.tick(700)
+  assert.ok(button.clicks > 3)
+  assert.equal(page.context.retrynaut.status().tripped, false)
+})
+
+test('carries a tripped circuit breaker into a fresh context', () => {
   const seededButton = actionButton('Retry', 'High traffic Retry')
   const seeded = runPage([seededButton], {
-    maxRetriesPerMinute: 120,
-    retryDelayMs: 0,
+    maxRetriesPerMinute: 3,
     scanIntervalMs: 100,
-  }, Array.from({ length: 120 }, (_, index) => 999_000 + index))
+  }, {
+    clicks: Array.from({ length: 3 }, (_, index) => 999_000 + index),
+    tripped: true,
+  })
   seeded.clock.tick(2_000)
   assert.equal(seededButton.clicks, 0)
+  assert.equal(seeded.context.retrynaut.status().tripped, true)
 })
 
 function actionButton(label, contextText) {
@@ -142,7 +164,7 @@ function article(textContent, rect = {}) {
   return node
 }
 
-function runPage(buttons, configOverrides = {}, seed = [], articles = []) {
+function runPage(buttons, configOverrides = {}, seed = { clicks: [], tripped: false }, articles = []) {
   const clock = fakeClock()
   const reports = []
   const body = element('')
@@ -157,9 +179,9 @@ function runPage(buttons, configOverrides = {}, seed = [], articles = []) {
     disconnect() {}
   }
   const context = {
-    __retrynautClickSeed: [...seed],
+    __retrynautStateSeed: structuredClone(seed),
     __retrynautReportClick: (value) => reports.push(Number(value)),
-    console: { info() {} },
+    console: { info() {}, warn() {} },
     Date: clock.Date,
     document: {
       body,

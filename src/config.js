@@ -6,7 +6,6 @@ export function defaultConfig() {
     mode: 'high-traffic-only',
     autoContinue: false,
     requireFocus: false,
-    retryDelayMs: 500,
     scanIntervalMs: 250,
   }
 }
@@ -19,11 +18,6 @@ export function validateConfig(config) {
   }
   if (!modes.has(config.mode)) {
     throw new Error(`unknown retry mode: ${config.mode}`)
-  }
-  if (!Number.isInteger(config.retryDelayMs)
-      || config.retryDelayMs < 0
-      || config.retryDelayMs > 30_000) {
-    throw new Error('retryDelayMs must be an integer between 0 and 30000')
   }
   if (!Number.isInteger(config.scanIntervalMs)
       || config.scanIntervalMs < 100
@@ -48,7 +42,6 @@ export async function loadConfig(file) {
     mode: stored.mode ?? defaults.mode,
     autoContinue: stored.autoContinue ?? stored.auto_continue ?? defaults.autoContinue,
     requireFocus: stored.requireFocus ?? stored.require_focus ?? defaults.requireFocus,
-    retryDelayMs: stored.retryDelayMs ?? stored.retry_delay_ms ?? defaults.retryDelayMs,
     scanIntervalMs: stored.scanIntervalMs ?? stored.scan_interval_ms ?? defaults.scanIntervalMs,
   }
   return validateConfig(config)

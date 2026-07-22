@@ -7,6 +7,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { createPrinter } from '../src/output.js'
+import { buildStatus } from '../src/presentation.js'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const packageInfo = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
@@ -53,4 +54,32 @@ test('status offers machine-readable JSON', async () => {
   } finally {
     await rm(home, { recursive: true, force: true })
   }
+})
+
+test('status reports a daemon-wide tripped circuit breaker', () => {
+  const status = buildStatus({
+    config: {
+      mode: 'high-traffic-only',
+      maxRetriesPerMinute: 20,
+      autoContinue: false,
+      requireFocus: false,
+    },
+    controller: null,
+    pageCount: 0,
+    paths: {},
+    runtime: null,
+    runtimeError: null,
+    state: {
+      installed: true,
+      running: true,
+      pid: 4242,
+      retry: { tripped: true, clicksLastMinute: 0, limit: 20 },
+    },
+  }, '0.1.1')
+
+  assert.deepEqual(status.circuitBreaker, {
+    tripped: true,
+    clicksLastMinute: 0,
+    limit: 20,
+  })
 })

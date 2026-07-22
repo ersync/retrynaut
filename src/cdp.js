@@ -19,9 +19,15 @@ export function isAntigravityPage(target) {
   }
 }
 
-export async function runController({ findPort, script, signal, logger = console, verbose = false }) {
+export async function runController({
+  findPort,
+  script,
+  signal,
+  logger = console,
+  verbose = false,
+  clickBudget = createClickBudget(),
+}) {
   let active
-  const clickBudget = createClickBudget()
 
   while (!signal.aborted) {
     try {
@@ -105,7 +111,7 @@ async function holdSession(target, script, clickBudget, signal, ready) {
       clickBudget.merge(existing?.result?.value)
       const seed = JSON.stringify(clickBudget.snapshot())
       await evaluate(session, {
-        expression: `globalThis.__retrynautClickSeed=${seed};\n${script}`,
+        expression: `globalThis.__retrynautStateSeed=${seed};\n${script}`,
         ...(contextId ? { contextId } : {}),
       })
     })().finally(() => injections.delete(injection))
@@ -139,10 +145,8 @@ async function holdSession(target, script, clickBudget, signal, ready) {
     mainContextId = undefined
   })
   const bindingListener = session.on('Runtime.bindingCalled', ({ name, payload, executionContextId }) => {
-    if (name === '__retrynautReportClick'
-        && (!mainContextId || executionContextId === mainContextId)) {
-      clickBudget.record(Number(payload))
-    }
+    if (mainContextId && executionContextId !== mainContextId) return
+    if (name === '__retrynautReportClick') clickBudget.record(Number(payload))
   })
 
   try {
@@ -196,7 +200,7 @@ async function holdSession(target, script, clickBudget, signal, ready) {
   }
 }
 
-function createClickBudget() {
+export function createClickBudget(limit = Number.POSITIVE_INFINITY) {
   const clicks = []
   const known = new Set()
   const prune = (now = Date.now()) => {
@@ -219,7 +223,15 @@ function createClickBudget() {
     },
     snapshot(now = Date.now()) {
       prune(now)
-      return [...clicks]
+      return { clicks: [...clicks], tripped: clicks.length >= limit }
+    },
+    status(now = Date.now()) {
+      prune(now)
+      return {
+        tripped: clicks.length >= limit,
+        clicksLastMinute: clicks.length,
+        limit,
+      }
     },
   }
 }

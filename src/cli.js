@@ -168,7 +168,7 @@ async function installCommand(args) {
   output.rows([
     ['Agent', `${output.green('Running')} ${output.dim(`· pid ${state.pid}`)}`],
     ['Mode', modeLabel(next.mode)],
-    ['Click limit', `${next.maxRetriesPerMinute} per minute`],
+    ['Circuit breaker', `${next.maxRetriesPerMinute} clicks / 60 sec`],
   ])
   output.blank()
   output.line(output.dim('Run `retrynaut status` at any time.'))
@@ -189,7 +189,7 @@ async function configureCommand(args) {
   output.blank()
   output.rows([
     ['Mode', modeLabel(next.mode)],
-    ['Click limit', `${next.maxRetriesPerMinute} per minute`],
+    ['Circuit breaker', `${next.maxRetriesPerMinute} clicks / 60 sec`],
     ['Auto-continue', next.autoContinue ? output.green('Enabled') : 'Disabled'],
     ['Agent', state.installed ? output.green('Restarted') : output.yellow('Not installed')],
   ])
@@ -241,7 +241,6 @@ function applyConfigArgs(current, args, includeTiming) {
     'require-focus': { type: 'boolean' },
   }
   if (includeTiming) {
-    options['retry-delay-ms'] = { type: 'string' }
     options['scan-interval-ms'] = { type: 'string' }
   }
   const { values } = parseArgs({ args, strict: true, allowNegative: true, options })
@@ -253,9 +252,6 @@ function applyConfigArgs(current, args, includeTiming) {
       : {}),
     ...(values['auto-continue'] !== undefined ? { autoContinue: values['auto-continue'] } : {}),
     ...(values['require-focus'] !== undefined ? { requireFocus: values['require-focus'] } : {}),
-    ...(values['retry-delay-ms'] !== undefined
-      ? { retryDelayMs: integer(values['retry-delay-ms'], '--retry-delay-ms') }
-      : {}),
     ...(values['scan-interval-ms'] !== undefined
       ? { scanIntervalMs: integer(values['scan-interval-ms'], '--scan-interval-ms') }
       : {}),
