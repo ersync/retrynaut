@@ -4,8 +4,10 @@ import { parseArgs } from 'node:util'
 import { isAntigravityPage, listTargets, pauseControllers, queryStatus } from './cdp.js'
 import { loadConfig, purgeConfigDir, saveConfig } from './config.js'
 import { runDaemon } from './daemon.js'
-import { findPort, portFiles, readPort } from './discovery.js'
+import { findPort } from './discovery.js'
+import { output } from './output.js'
 import { appPaths } from './paths.js'
+import { buildStatus, modeLabel, printStatus } from './presentation.js'
 import { installRuntime, loadRuntime } from './runtime.js'
 import { installService, removeService, serviceState, startService, stopService } from './service.js'
 
@@ -33,7 +35,7 @@ export async function main(args) {
     case 'version':
     case '--version':
     case '-v':
-      console.log(`retrynaut ${packageInfo.version}`)
+      output.line(`retrynaut ${packageInfo.version}`)
       return
     case 'help':
     case '--help':
@@ -68,60 +70,88 @@ async function doctorCommand(args) {
   const { values } = parseArgs({
     args,
     strict: true,
-    options: { 'port-file': { type: 'string' } },
+    options: {
+      'port-file': { type: 'string' },
+      verbose: { type: 'boolean', default: false },
+    },
   })
-  console.log('Retrynaut doctor')
-  for (const file of portFiles(values['port-file'])) {
-    try {
-      await readPort(file)
-      console.log(`  ${file}: ok`)
-    } catch (error) {
-      console.log(`  ${file}: ${error.code === 'ENOENT' ? 'not found' : error.message}`)
-    }
-  }
-
   const { port, file } = await findPort(values['port-file'])
-  console.log(`debugging port: ${port} (${file})`)
   const targets = (await listTargets(port)).filter(isAntigravityPage)
   if (targets.length === 0) throw new Error('CDP is available, but no Antigravity page is ready')
-  console.log(`Antigravity pages: ${targets.length}`)
-  if (targets.length > 1) console.log('warning: Retrynaut watches one Antigravity page at a time')
-  console.log('result: ready')
+
+  output.title('Retrynaut', 'doctor')
+  output.blank()
+  output.checks([
+    ['Debug connection', `Available ${output.dim(`· port ${port}`)}`],
+    ['Antigravity page', `${targets.length} found`],
+  ])
+  if (targets.length > 1) {
+    output.blank()
+    output.warning('Multiple pages found; Retrynaut watches one at a time.')
+  }
+  if (values.verbose) {
+    output.blank()
+    output.section('Details')
+    output.rows([['Port file', file]])
+  }
+  output.blank()
+  output.success('Ready — no clicks performed')
 }
 
 async function statusCommand(args) {
-  parseArgs({ args, strict: true })
+  const { values } = parseArgs({
+    args,
+    strict: true,
+    options: {
+      json: { type: 'boolean', default: false },
+      verbose: { type: 'boolean', default: false },
+    },
+  })
   const paths = appPaths()
   const state = await serviceState(paths)
-  console.log(`CLI version: ${packageInfo.version}`)
-  console.log(`installed: ${yesNo(state.installed)}`)
-  console.log(`background agent: ${state.running ? `running (pid ${state.pid})` : 'stopped'}`)
+  const config = await loadConfig(paths.configFile)
+  let runtime
+  let runtimeError
   if (state.installed) {
     try {
-      const runtime = await loadRuntime(paths)
-      console.log(`installed version: ${runtime.version || 'unknown'}`)
-      console.log(`installed node: ${runtime.nodePath}`)
-      console.log(`installed at: ${runtime.installedAt || 'unknown'}`)
+      runtime = await loadRuntime(paths)
     } catch (error) {
-      console.log(`installed runtime: ${error.message}`)
+      runtimeError = error.message
     }
   }
 
+  let controller
+  let pageCount = 0
   try {
     const { port } = await findPort()
     const targets = (await listTargets(port)).filter(isAntigravityPage)
+    pageCount = targets.length
     for (const target of targets) {
       try {
-        console.log(JSON.stringify(await queryStatus(target), null, 2))
-        return
+        controller = await queryStatus(target)
+        break
       } catch {
         continue
       }
     }
-    console.log('controller: waiting for Antigravity')
   } catch {
-    console.log('controller: waiting for Antigravity')
+    // Antigravity is not ready yet.
   }
+
+  const status = buildStatus({
+    config,
+    controller,
+    pageCount,
+    paths,
+    runtime,
+    runtimeError,
+    state,
+  }, packageInfo.version)
+  if (values.json) {
+    output.line(JSON.stringify(status, null, 2))
+    return
+  }
+  printStatus(status, values.verbose)
 }
 
 async function installCommand(args) {
@@ -133,10 +163,15 @@ async function installCommand(args) {
   await stopService(paths)
   const runtime = await installRuntime(paths)
   const state = await installService(paths, runtime)
-  console.log(`installed: ${paths.runtimeDir}`)
-  console.log(`startup: ${state.registration}`)
-  console.log(`background agent: running (pid ${state.pid})`)
-  console.log(`mode=${next.mode} max=${next.maxRetriesPerMinute}/min`)
+  output.success('Retrynaut installed')
+  output.blank()
+  output.rows([
+    ['Agent', `${output.green('Running')} ${output.dim(`· pid ${state.pid}`)}`],
+    ['Mode', modeLabel(next.mode)],
+    ['Click limit', `${next.maxRetriesPerMinute} per minute`],
+  ])
+  output.blank()
+  output.line(output.dim('Run `retrynaut status` at any time.'))
 }
 
 async function configureCommand(args) {
@@ -150,21 +185,33 @@ async function configureCommand(args) {
     await stopService(paths)
     await startService(paths)
   }
-  console.log(`saved ${paths.configFile}`)
-  console.log(`mode=${next.mode} max=${next.maxRetriesPerMinute}/min auto-continue=${next.autoContinue}`)
+  output.success('Configuration saved')
+  output.blank()
+  output.rows([
+    ['Mode', modeLabel(next.mode)],
+    ['Click limit', `${next.maxRetriesPerMinute} per minute`],
+    ['Auto-continue', next.autoContinue ? output.green('Enabled') : 'Disabled'],
+    ['Agent', state.installed ? output.green('Restarted') : output.yellow('Not installed')],
+  ])
 }
 
 async function startCommand(args) {
   parseArgs({ args, strict: true })
-  const state = await startService(appPaths())
-  console.log(`Retrynaut started (pid ${state.pid}).`)
+  const paths = appPaths()
+  const before = await serviceState(paths)
+  const state = await startService(paths)
+  output.success(before.running ? 'Retrynaut is already running' : 'Retrynaut started')
+  output.line(output.dim(`  pid ${state.pid}`))
 }
 
 async function stopCommand(args) {
   parseArgs({ args, strict: true })
+  const paths = appPaths()
+  const before = await serviceState(paths)
   await pauseCurrentController()
-  await stopService(appPaths())
-  console.log('Retrynaut stopped. Automatic startup remains enabled.')
+  await stopService(paths)
+  output.success(before.running ? 'Retrynaut stopped' : 'Retrynaut is already stopped')
+  output.line(output.dim('  Automatic startup remains enabled.'))
 }
 
 async function uninstallCommand(args) {
@@ -178,9 +225,11 @@ async function uninstallCommand(args) {
   await removeService(paths)
   if (values.purge) {
     await purgeConfigDir(paths.configDir)
-    console.log('Background agent, runtime, logs, and configuration removed.')
+    output.success('Retrynaut removed')
+    output.line(output.dim('  Background agent, runtime, logs, and configuration deleted.'))
   } else {
-    console.log('Background agent removed. Run with --purge to remove its files and configuration too.')
+    output.success('Background agent removed')
+    output.line(output.dim('  Runtime and configuration kept. Use --purge to remove them too.'))
   }
 }
 
@@ -227,21 +276,20 @@ function integer(value, option) {
   return Number(value)
 }
 
-function yesNo(value) {
-  return value ? 'yes' : 'no'
-}
-
 function printHelp() {
-  console.log(`Retrynaut - automatic retry companion for Antigravity
+  output.line(`${output.bold(`Retrynaut ${packageInfo.version}`)}
+Automatic retry companion for Antigravity
 
 Usage:
-  retrynaut install [--max-per-minute 20]
-  retrynaut configure [options]
-  retrynaut doctor
-  retrynaut status
-  retrynaut start
-  retrynaut stop
-  retrynaut uninstall [--purge]
-  retrynaut run [--verbose]
-  retrynaut version`)
+  retrynaut <command> [options]
+
+Commands:
+  install [--max-per-minute 20]
+  configure [options]
+  doctor [--verbose]
+  status [--json] [--verbose]
+  start
+  stop
+  uninstall [--purge]
+  version`)
 }

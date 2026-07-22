@@ -59,6 +59,7 @@ These examples assume a global install. With `npx`, replace `retrynaut` with
 ```bash
 retrynaut doctor
 retrynaut status
+retrynaut status --json
 retrynaut start
 retrynaut stop
 retrynaut configure --max-per-minute 20
@@ -67,6 +68,9 @@ retrynaut uninstall --purge
 
 `doctor` checks the local debugging connection without injecting the controller
 or clicking anything.
+
+`status` is concise by default. Use `--verbose` for installation details or
+`--json` for machine-readable output.
 
 `stop` stops the current agent but leaves automatic startup enabled. `start`
 brings it back immediately. `uninstall --purge` removes the background
