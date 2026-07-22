@@ -7,6 +7,8 @@ import test from 'node:test'
 import { appPaths } from '../src/paths.js'
 import { installRuntime, loadRuntime } from '../src/runtime.js'
 
+const sourcePackage = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+
 test('copies a stable runtime out of the npm package', async (context) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-runtime-'))
   context.after(() => rm(home, { recursive: true, force: true }))
@@ -15,12 +17,14 @@ test('copies a stable runtime out of the npm package', async (context) => {
   const runtime = await loadRuntime(paths)
   assert.equal(runtime.nodePath, '/usr/bin/node')
   assert.equal(runtime.cliPath, paths.runtimeCli)
-  assert.equal(runtime.version, '0.1.0')
+  assert.equal(runtime.version, sourcePackage.version)
   assert.match(runtime.installedAt, /^\d{4}-\d{2}-\d{2}T/)
   await access(path.join(paths.runtimeDir, 'src', 'retry.js'))
   await access(paths.runtimeCli)
-  const packageInfo = JSON.parse(await readFile(path.join(paths.runtimeDir, 'package.json'), 'utf8'))
-  assert.equal(packageInfo.version, '0.1.0')
+  const installedPackage = JSON.parse(
+    await readFile(path.join(paths.runtimeDir, 'package.json'), 'utf8'),
+  )
+  assert.equal(installedPackage.version, sourcePackage.version)
 })
 
 function testEnv(home) {
