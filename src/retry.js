@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 2
+  const VERSION = 3
   const CONFIG = __RETRYNAUT_CONFIG__
   const previous = globalThis.retrynaut
 
@@ -87,6 +87,28 @@
     return null
   }
 
+  function matchCurrentArticle(patterns) {
+    const articles = [...document.querySelectorAll('[role="article"]')]
+    for (let index = articles.length - 1; index >= 0; index -= 1) {
+      const article = articles[index]
+      if (!isVisible(article)) continue
+      const rect = article.getBoundingClientRect()
+      if (rect.bottom <= 0 || rect.right <= 0
+          || rect.top >= innerHeight || rect.left >= innerWidth) continue
+
+      const text = article.textContent || ''
+      if (text.length > 2_000) return null
+      return patterns.find((pattern) => pattern.regex.test(text)) || null
+    }
+    return null
+  }
+
+  function matchSeparatedRetry(button, patterns) {
+    const terminated = retryPatterns.find((pattern) => pattern.name === 'agent terminated')
+    if (!terminated || !matchContext(button, [terminated])) return null
+    return matchCurrentArticle(patterns)
+  }
+
   function pruneClicks(now = Date.now()) {
     const cutoff = now - clickWindowMs
     while (recentClicks.length && recentClicks[0] <= cutoff) recentClicks.shift()
@@ -104,6 +126,7 @@
       const text = buttonText(button)
       if (text === 'retry' || text === 'try again') {
         const pattern = matchContext(button, activeRetryPatterns)
+          || matchSeparatedRetry(button, activeRetryPatterns)
         if (pattern) return { button, pattern, kind: 'retry' }
       }
       if (CONFIG.autoContinue && text === 'continue') {

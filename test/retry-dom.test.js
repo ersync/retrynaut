@@ -13,6 +13,23 @@ test('clicks an exact Retry button beside a high-traffic error', () => {
   assert.equal(page.reports.length, 1)
 })
 
+test('matches the current high-traffic article when the Retry panel is separate', () => {
+  const button = actionButton('Retry', 'Agent terminated due to error Retry')
+  const currentError = article('Our servers are experiencing high traffic right now')
+  const page = runPage([button], {}, [], [currentError])
+  page.clock.tick(700)
+  assert.equal(button.clicks, 1)
+})
+
+test('does not use an old high-traffic article for a different current error', () => {
+  const button = actionButton('Retry', 'Agent terminated due to error Retry')
+  const oldError = article('High traffic', { top: -200, bottom: -100 })
+  const currentError = article('Authentication failed')
+  const page = runPage([button], {}, [], [oldError, currentError])
+  page.clock.tick(700)
+  assert.equal(button.clicks, 0)
+})
+
 test('ignores unrelated errors and inexact button labels', () => {
   const unrelated = actionButton('Retry', 'Authentication failed Retry')
   const inexact = actionButton('Retry now', 'High traffic Retry now')
@@ -113,7 +130,19 @@ function element(textContent, parentElement) {
   }
 }
 
-function runPage(buttons, configOverrides = {}, seed = []) {
+function article(textContent, rect = {}) {
+  const node = element(textContent)
+  node.getBoundingClientRect = () => ({
+    top: 100,
+    bottom: 200,
+    left: 100,
+    right: 200,
+    ...rect,
+  })
+  return node
+}
+
+function runPage(buttons, configOverrides = {}, seed = [], articles = []) {
   const clock = fakeClock()
   const reports = []
   const body = element('')
@@ -136,9 +165,11 @@ function runPage(buttons, configOverrides = {}, seed = []) {
       body,
       documentElement,
       hasFocus: () => true,
-      querySelectorAll: () => buttons,
+      querySelectorAll: (selector) => selector === '[role="article"]' ? articles : buttons,
     },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    innerHeight: 1_000,
+    innerWidth: 1_000,
     MutationObserver,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clear,
