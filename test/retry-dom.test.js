@@ -58,6 +58,16 @@ test('stops an orphaned controller when its daemon lease expires', () => {
   const page = runPage([])
   page.clock.tick(11_000)
   assert.equal(page.context.retrynaut.status().running, false)
+
+  page.context.retrynaut.heartbeat()
+  assert.equal(page.context.retrynaut.status().running, true)
+})
+
+test('does not undo an intentional stop when a heartbeat arrives', () => {
+  const page = runPage([])
+  page.context.retrynaut.stop()
+  page.context.retrynaut.heartbeat()
+  assert.equal(page.context.retrynaut.status().running, false)
 })
 
 test('enforces the configured ceiling and carries it into a fresh context', () => {

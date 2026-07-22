@@ -10,7 +10,7 @@ import { appPaths } from '../src/paths.js'
 test('closes its resources when startup fails', async (context) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-daemon-'))
   context.after(() => rm(home, { recursive: true, force: true }))
-  const paths = appPaths({ platform: 'linux', home, env: {} })
+  const paths = appPaths({ platform: process.platform, home, env: testEnv(home) })
   const configFile = path.join(paths.configDir, 'broken.json')
   await mkdir(paths.configDir, { recursive: true })
   await writeFile(configFile, '{')
@@ -19,6 +19,15 @@ test('closes its resources when startup fails', async (context) => {
     runDaemon({ paths, configFile }),
     /could not read config/,
   )
-  await assert.rejects(access(paths.controlEndpoint), { code: 'ENOENT' })
+  if (process.platform !== 'win32') {
+    await assert.rejects(access(paths.controlEndpoint), { code: 'ENOENT' })
+  }
   await access(paths.logFile)
 })
+
+function testEnv(home) {
+  return {
+    APPDATA: path.join(home, 'AppData', 'Roaming'),
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+  }
+}

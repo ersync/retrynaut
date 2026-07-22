@@ -27,7 +27,14 @@ export async function createControlServer(paths, handlers) {
     }
   }
 
-  if (process.platform !== 'win32') await chmod(paths.controlEndpoint, 0o600)
+  if (process.platform !== 'win32') {
+    try {
+      await chmod(paths.controlEndpoint, 0o600)
+    } catch (error) {
+      await closeServer(server, sockets, paths.controlEndpoint)
+      throw error
+    }
+  }
   return {
     close: () => closeServer(server, sockets, paths.controlEndpoint),
   }

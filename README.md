@@ -1,8 +1,8 @@
 # Retrynaut
 
-Retrynaut watches the Antigravity v2 desktop app and clicks Retry when a model
-run fails with a high-traffic error. It runs locally in the background, so the
-window does not need constant attention.
+Retrynaut watches Claude runs in the Antigravity 2.x desktop app and clicks
+Retry when a run fails with a `high-traffic` error. It runs locally in the
+background, so the window does not need constant attention.
 
 This edition is plain JavaScript distributed through npm. There is no compiled
 Retrynaut binary and no postinstall script that downloads one.
@@ -43,8 +43,13 @@ global packages.
 - Makes no external API calls and has no telemetry.
 
 The default mode only matches high-traffic errors. One active agent shares a
-hard ceiling of 20 clicks per minute across page reloads. Stopping the agent
+hard ceiling of 20 automatic clicks per minute across page reloads. The ceiling
+also includes Continue clicks when auto-continue is enabled. Stopping the agent
 also stops its injected controller; Antigravity files are never modified.
+
+Retrynaut currently watches one matching Antigravity page at a time. If several
+Antigravity windows are open, it may not watch the window containing the failed
+run.
 
 ## Commands
 

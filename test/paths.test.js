@@ -10,9 +10,9 @@ test('uses native config locations', () => {
     '/Users/test/Library/Application Support/retrynaut',
   )
   assert.equal(mac.controlEndpoint, `${mac.configDir}/control.sock`)
-  assert.match(
+  assert.equal(
     appPaths({ platform: 'win32', home: 'C:\\Users\\test', env: { APPDATA: 'C:\\AppData' } }).configDir,
-    /retrynaut$/,
+    'C:\\AppData\\retrynaut',
   )
   assert.equal(
     appPaths({ platform: 'linux', home: '/home/test', env: {} }).configDir,

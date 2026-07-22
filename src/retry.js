@@ -45,6 +45,7 @@
   let fallbackTimer
   let leaseTimer
   let leaseUntil = 0
+  let stoppedByLease = false
   let lastClickAt = 0
   let totalClicks = 0
   let retryClicks = 0
@@ -154,10 +155,25 @@
     leaseUntil = Date.now() + leaseDurationMs
   }
 
+  function stopController(reason) {
+    stoppedByLease = reason === 'lease'
+    running = false
+    observer?.disconnect()
+    observer = undefined
+    clearTimeout(scanTimer)
+    clearInterval(fallbackTimer)
+    clearInterval(leaseTimer)
+    scanTimer = undefined
+    fallbackTimer = undefined
+    leaseTimer = undefined
+    return controller.status()
+  }
+
   const controller = {
     version: VERSION,
     start() {
       renewLease()
+      stoppedByLease = false
       if (running) return this.status()
       running = true
       observer = new MutationObserver(scheduleScan)
@@ -170,26 +186,18 @@
       })
       fallbackTimer = setInterval(scheduleScan, CONFIG.scanIntervalMs)
       leaseTimer = setInterval(() => {
-        if (Date.now() > leaseUntil) this.stop()
+        if (Date.now() > leaseUntil) stopController('lease')
       }, 1_000)
       scheduleScan()
       console.info(`[Retrynaut] Started in ${CONFIG.mode} mode.`)
       return this.status()
     },
     stop() {
-      running = false
-      observer?.disconnect()
-      observer = undefined
-      clearTimeout(scanTimer)
-      clearInterval(fallbackTimer)
-      clearInterval(leaseTimer)
-      scanTimer = undefined
-      fallbackTimer = undefined
-      leaseTimer = undefined
-      return this.status()
+      return stopController('manual')
     },
     heartbeat() {
       renewLease()
+      if (stoppedByLease) return this.start()
       return this.status()
     },
     reset() {

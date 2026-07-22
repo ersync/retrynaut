@@ -7,40 +7,52 @@ export function appPaths({
   platform = process.platform,
   home = os.homedir(),
 } = {}) {
+  const nativePath = platform === 'win32' ? path.win32 : path.posix
   let configDir
   if (platform === 'darwin') {
-    configDir = path.join(home, 'Library', 'Application Support', 'retrynaut')
+    configDir = nativePath.join(home, 'Library', 'Application Support', 'retrynaut')
   } else if (platform === 'win32') {
-    configDir = path.join(env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'retrynaut')
+    configDir = nativePath.join(
+      env.APPDATA || nativePath.join(home, 'AppData', 'Roaming'),
+      'retrynaut',
+    )
   } else {
-    configDir = path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'retrynaut')
+    configDir = nativePath.join(
+      env.XDG_CONFIG_HOME || nativePath.join(home, '.config'),
+      'retrynaut',
+    )
   }
 
-  const runtimeDir = path.join(configDir, 'runtime')
+  const runtimeDir = nativePath.join(configDir, 'runtime')
   const paths = {
     configDir,
-    configFile: path.join(configDir, 'config.json'),
-    logFile: path.join(configDir, 'retrynaut.log'),
-    pidFile: path.join(configDir, 'retrynaut.pid'),
-    runtimeFile: path.join(configDir, 'runtime.json'),
-    controlKeyFile: path.join(configDir, 'control.key'),
+    configFile: nativePath.join(configDir, 'config.json'),
+    logFile: nativePath.join(configDir, 'retrynaut.log'),
+    pidFile: nativePath.join(configDir, 'retrynaut.pid'),
+    runtimeFile: nativePath.join(configDir, 'runtime.json'),
+    controlKeyFile: nativePath.join(configDir, 'control.key'),
     runtimeDir,
-    runtimeCli: path.join(runtimeDir, 'bin', 'retrynaut.js'),
+    runtimeCli: nativePath.join(runtimeDir, 'bin', 'retrynaut.js'),
   }
 
   paths.controlEndpoint = platform === 'win32'
     ? `\\\\.\\pipe\\retrynaut-${createHash('sha256').update(configDir).digest('hex').slice(0, 12)}`
-    : path.join(configDir, 'control.sock')
+    : nativePath.join(configDir, 'control.sock')
 
   if (platform === 'darwin') {
-    paths.registration = path.join(home, 'Library', 'LaunchAgents', 'dev.ersync.retrynaut.plist')
+    paths.registration = nativePath.join(
+      home,
+      'Library',
+      'LaunchAgents',
+      'dev.ersync.retrynaut.plist',
+    )
   } else if (platform === 'win32') {
     paths.registration = 'Task Scheduler: Retrynaut'
-    paths.windowsTaskXml = path.join(configDir, 'retrynaut-task.xml')
+    paths.windowsTaskXml = nativePath.join(configDir, 'retrynaut-task.xml')
   } else {
-    const configHome = env.XDG_CONFIG_HOME || path.join(home, '.config')
-    paths.systemdUnit = path.join(configHome, 'systemd', 'user', 'retrynaut.service')
-    paths.xdgEntry = path.join(configHome, 'autostart', 'retrynaut.desktop')
+    const configHome = env.XDG_CONFIG_HOME || nativePath.join(home, '.config')
+    paths.systemdUnit = nativePath.join(configHome, 'systemd', 'user', 'retrynaut.service')
+    paths.xdgEntry = nativePath.join(configHome, 'autostart', 'retrynaut.desktop')
     paths.registration = paths.systemdUnit
   }
   return paths

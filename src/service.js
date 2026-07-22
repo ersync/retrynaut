@@ -17,6 +17,9 @@ export async function installService(paths, runtime, platform = process.platform
 }
 
 export async function startService(paths, platform = process.platform) {
+  const current = await serviceState(paths, platform)
+  if (current.running) return current
+
   const runtime = await readRuntime(paths)
   if (platform === 'darwin') {
     run('launchctl', ['bootstrap', launchDomain(), paths.registration])

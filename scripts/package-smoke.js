@@ -6,14 +6,16 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmCli = process.env.npm_execpath
+const npm = npmCli ? process.execPath : 'npm'
+const npmArgs = (args) => npmCli ? [npmCli, ...args] : args
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-pack-'))
 let tarball
 
 try {
-  const packed = run(npm, [
+  const packed = run(npm, npmArgs([
     'pack', '--json', '--ignore-scripts', '--pack-destination', temporary,
-  ], root)
+  ]), root)
   const result = JSON.parse(packed)
   assert.equal(result.length, 1)
   tarball = path.join(temporary, result[0].filename)
@@ -25,7 +27,7 @@ try {
 
   const installDir = path.join(temporary, 'installed')
   await mkdir(installDir)
-  run(npm, ['install', '--ignore-scripts', '--prefix', installDir, tarball], root)
+  run(npm, npmArgs(['install', '--ignore-scripts', '--prefix', installDir, tarball]), root)
   const installedPackage = path.join(installDir, 'node_modules', 'retrynaut')
   const metadata = JSON.parse(await readFile(path.join(installedPackage, 'package.json'), 'utf8'))
   assert.equal(metadata.name, 'retrynaut')

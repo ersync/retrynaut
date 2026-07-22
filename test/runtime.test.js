@@ -10,7 +10,7 @@ import { installRuntime, loadRuntime } from '../src/runtime.js'
 test('copies a stable runtime out of the npm package', async (context) => {
   const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-runtime-'))
   context.after(() => rm(home, { recursive: true, force: true }))
-  const paths = appPaths({ platform: 'linux', home, env: {} })
+  const paths = appPaths({ platform: process.platform, home, env: testEnv(home) })
   await installRuntime(paths, '/usr/bin/node')
   const runtime = await loadRuntime(paths)
   assert.equal(runtime.nodePath, '/usr/bin/node')
@@ -22,3 +22,10 @@ test('copies a stable runtime out of the npm package', async (context) => {
   const packageInfo = JSON.parse(await readFile(path.join(paths.runtimeDir, 'package.json'), 'utf8'))
   assert.equal(packageInfo.version, '0.1.0')
 })
+
+function testEnv(home) {
+  return {
+    APPDATA: path.join(home, 'AppData', 'Roaming'),
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+  }
+}

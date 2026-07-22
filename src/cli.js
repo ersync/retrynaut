@@ -85,6 +85,7 @@ async function doctorCommand(args) {
   const targets = (await listTargets(port)).filter(isAntigravityPage)
   if (targets.length === 0) throw new Error('CDP is available, but no Antigravity page is ready')
   console.log(`Antigravity pages: ${targets.length}`)
+  if (targets.length > 1) console.log('warning: Retrynaut watches one Antigravity page at a time')
   console.log('result: ready')
 }
 

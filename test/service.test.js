@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
+import { createControlServer } from '../src/control.js'
+import { appPaths } from '../src/paths.js'
 import {
   renderLaunchAgent,
   renderSystemdUnit,
   renderWindowsTask,
   renderXdgEntry,
+  startService,
 } from '../src/service.js'
 
 const paths = {
@@ -44,3 +50,38 @@ test('renders a least-privilege Windows task that restarts after failure', () =>
   assert.match(task, /C:\\Program Files\\nodejs\\node\.exe/)
   assert.match(task, /C:\\User &amp; Data\\runtime\\bin/)
 })
+
+test('start succeeds without relaunching an already healthy agent', async (context) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-start-'))
+  context.after(() => rm(home, { recursive: true, force: true }))
+  const nativePaths = testPaths(home)
+  nativePaths.systemdUnit = path.join(home, 'systemd', 'retrynaut.service')
+  nativePaths.xdgEntry = path.join(home, 'autostart', 'retrynaut.desktop')
+  await mkdir(path.dirname(nativePaths.xdgEntry), { recursive: true })
+  await writeFile(nativePaths.xdgEntry, '[Desktop Entry]\n')
+  const control = await createControlServer(nativePaths, {
+    status: () => ({ pid: 4242, startedAt: 'now' }),
+  })
+  context.after(() => control.close())
+
+  const state = await startService(nativePaths, 'linux')
+  assert.equal(state.installed, true)
+  assert.equal(state.running, true)
+  assert.equal(state.pid, 4242)
+})
+
+function testEnv(home) {
+  return {
+    APPDATA: path.join(home, 'AppData', 'Roaming'),
+    XDG_CONFIG_HOME: path.join(home, '.config'),
+  }
+}
+
+function testPaths(home) {
+  const paths = appPaths({ platform: process.platform, home, env: testEnv(home) })
+  if (process.platform !== 'win32') {
+    paths.controlEndpoint = path.join(home, 'control.sock')
+    paths.controlKeyFile = path.join(home, 'control.key')
+  }
+  return paths
+}
