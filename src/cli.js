@@ -8,7 +8,7 @@ import { findPort } from './discovery.js'
 import { output } from './output.js'
 import { appPaths } from './paths.js'
 import { buildStatus, modeLabel, printStatus } from './presentation.js'
-import { installRuntime, loadRuntime } from './runtime.js'
+import { installRuntime, loadRuntime, removeRuntime } from './runtime.js'
 import { installService, removeService, serviceState, startService, stopService } from './service.js'
 
 const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
@@ -75,27 +75,75 @@ async function doctorCommand(args) {
       verbose: { type: 'boolean', default: false },
     },
   })
-  const { port, file } = await findPort(values['port-file'])
-  const targets = (await listTargets(port)).filter(isAntigravityPage)
-  if (targets.length === 0) throw new Error('CDP is available, but no Antigravity page is ready')
+  let port
+  let file
+  let targets
+  try {
+    ({ port, file } = await findPort(values['port-file']))
+    targets = (await listTargets(port)).filter(isAntigravityPage)
+    if (targets.length === 0) {
+      const error = new Error('no compatible Antigravity page was found')
+      error.code = 'NO_ANTIGRAVITY_PAGE'
+      throw error
+    }
+  } catch (error) {
+    throw new Error(formatDoctorFailure(error, {
+      file,
+      port,
+      verbose: values.verbose,
+    }))
+  }
 
-  output.title('Retrynaut', 'doctor')
-  output.blank()
-  output.checks([
-    ['Debug connection', `Available ${output.dim(`· port ${port}`)}`],
-    ['Antigravity page', `${targets.length} found`],
-  ])
+  output.line(`Debug connection: ${output.green('Available')} ${output.dim(`(port ${port})`)}`)
+  output.line(`Antigravity: ${output.green('Connected')}`)
   if (targets.length > 1) {
     output.blank()
     output.warning('Multiple pages found; Retrynaut watches one at a time.')
   }
+  output.blank()
+  output.line(output.dim('No clicks performed.'))
   if (values.verbose) {
     output.blank()
     output.section('Details')
-    output.rows([['Port file', file]])
+    output.rows([
+      ['Antigravity pages', targets.length],
+      ['Port file', file],
+    ])
   }
-  output.blank()
-  output.success('Ready — no clicks performed')
+}
+
+function formatDoctorFailure(error, { file, port, verbose }) {
+  const cause = deepestCause(error)
+  let message
+
+  if (error.code === 'NO_ANTIGRAVITY_PAGE') {
+    message = 'Antigravity is still opening.\n\nWait a moment, then try again.'
+  } else if (isUnavailable(error, cause)) {
+    message = 'Cannot find Antigravity.\n\nMake sure it is open, then try again.'
+  } else {
+    message = 'Could not check Antigravity.\n\nRestart it, then try again.'
+  }
+
+  if (!verbose) return message
+
+  const details = [cause.message]
+  if (port) details.push(`Port: ${port}`)
+  if (file) details.push(`Port file: ${file}`)
+  return `${message}\n\nDetails\n${details.map((detail) => `  ${detail}`).join('\n')}`
+}
+
+function deepestCause(error) {
+  let cause = error
+  while (cause?.cause instanceof Error) cause = cause.cause
+  return cause
+}
+
+function isUnavailable(error, cause) {
+  return error.message === 'DevToolsActivePort was not found'
+    || error.message.startsWith('invalid debugging port:')
+    || error.message === 'fetch failed'
+    || ['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ETIMEDOUT'].includes(cause.code)
+    || ['AbortError', 'TimeoutError'].includes(cause.name)
 }
 
 async function statusCommand(args) {
@@ -162,16 +210,10 @@ async function installCommand(args) {
   await pauseCurrentController()
   await stopService(paths)
   const runtime = await installRuntime(paths)
-  const state = await installService(paths, runtime)
-  output.success('Retrynaut installed')
+  await installService(paths, runtime)
+  output.line(`Automatic retry: ${output.green('On')}`)
   output.blank()
-  output.rows([
-    ['Agent', `${output.green('Running')} ${output.dim(`· pid ${state.pid}`)}`],
-    ['Mode', modeLabel(next.mode)],
-    ['Circuit breaker', `${next.maxRetriesPerMinute} clicks / 60 sec`],
-  ])
-  output.blank()
-  output.line(output.dim('Run `retrynaut status` at any time.'))
+  output.line(output.dim('Starts automatically at sign-in.'))
 }
 
 async function configureCommand(args) {
@@ -180,28 +222,29 @@ async function configureCommand(args) {
   const next = applyConfigArgs(current, args, true)
   await saveConfig(paths.configFile, next)
   const state = await serviceState(paths)
-  if (state.installed) {
+  if (state.startupEnabled) {
     await pauseCurrentController()
     await stopService(paths)
     await startService(paths)
   }
-  output.success('Configuration saved')
+  output.line('Configuration saved.')
   output.blank()
-  output.rows([
-    ['Mode', modeLabel(next.mode)],
-    ['Circuit breaker', `${next.maxRetriesPerMinute} clicks / 60 sec`],
-    ['Auto-continue', next.autoContinue ? output.green('Enabled') : 'Disabled'],
-    ['Agent', state.installed ? output.green('Restarted') : output.yellow('Not installed')],
-  ])
+  output.line(`Mode: ${modeLabel(next.mode)} · Retry limit: ${next.maxRetriesPerMinute}/min`)
+  if (!state.installed) output.line(output.dim('Run `retrynaut install` to turn it on.'))
 }
 
 async function startCommand(args) {
   parseArgs({ args, strict: true })
   const paths = appPaths()
   const before = await serviceState(paths)
-  const state = await startService(paths)
-  output.success(before.running ? 'Retrynaut is already running' : 'Retrynaut started')
-  output.line(output.dim(`  pid ${state.pid}`))
+  await startService(paths)
+  output.line(`Automatic retry: ${output.green('On')}`)
+  if (before.running && before.startupEnabled) {
+    output.line(output.dim('Already running.'))
+  } else {
+    output.blank()
+    output.line(output.dim('It will also start automatically at sign-in.'))
+  }
 }
 
 async function stopCommand(args) {
@@ -210,8 +253,10 @@ async function stopCommand(args) {
   const before = await serviceState(paths)
   await pauseCurrentController()
   await stopService(paths)
-  output.success(before.running ? 'Retrynaut stopped' : 'Retrynaut is already stopped')
-  output.line(output.dim('  Automatic startup remains enabled.'))
+  output.line(`Automatic retry: ${output.yellow('Off')}`)
+  if (!before.running && !before.startupEnabled) output.line(output.dim('Already stopped.'))
+  output.blank()
+  output.line(output.dim('Run `retrynaut start` to turn it back on.'))
 }
 
 async function uninstallCommand(args) {
@@ -223,13 +268,14 @@ async function uninstallCommand(args) {
   const paths = appPaths()
   await pauseCurrentController()
   await removeService(paths)
+  await removeRuntime(paths)
   if (values.purge) {
     await purgeConfigDir(paths.configDir)
-    output.success('Retrynaut removed')
-    output.line(output.dim('  Background agent, runtime, logs, and configuration deleted.'))
+    output.line('Retrynaut uninstalled.')
+    output.line(output.dim('Configuration and logs removed.'))
   } else {
-    output.success('Background agent removed')
-    output.line(output.dim('  Runtime and configuration kept. Use --purge to remove them too.'))
+    output.line('Retrynaut uninstalled.')
+    output.line(output.dim('Configuration and logs kept. Use --purge to remove them too.'))
   }
 }
 
@@ -237,7 +283,6 @@ function applyConfigArgs(current, args, includeTiming) {
   const options = {
     mode: { type: 'string' },
     'max-per-minute': { type: 'string' },
-    'auto-continue': { type: 'boolean' },
     'require-focus': { type: 'boolean' },
   }
   if (includeTiming) {
@@ -250,7 +295,6 @@ function applyConfigArgs(current, args, includeTiming) {
     ...(values['max-per-minute'] !== undefined
       ? { maxRetriesPerMinute: integer(values['max-per-minute'], '--max-per-minute') }
       : {}),
-    ...(values['auto-continue'] !== undefined ? { autoContinue: values['auto-continue'] } : {}),
     ...(values['require-focus'] !== undefined ? { requireFocus: values['require-focus'] } : {}),
     ...(values['scan-interval-ms'] !== undefined
       ? { scanIntervalMs: integer(values['scan-interval-ms'], '--scan-interval-ms') }

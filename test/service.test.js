@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -11,7 +11,9 @@ import {
   renderSystemdUnit,
   renderWindowsTask,
   renderXdgEntry,
+  serviceState,
   startService,
+  stopService,
 } from '../src/service.js'
 
 const paths = {
@@ -68,6 +70,36 @@ test('start succeeds without relaunching an already healthy agent', async (conte
   assert.equal(state.installed, true)
   assert.equal(state.running, true)
   assert.equal(state.pid, 4242)
+})
+
+test('stop disables startup but keeps the installed runtime', async (context) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-stop-'))
+  context.after(() => rm(home, { recursive: true, force: true }))
+  const nativePaths = testPaths(home)
+  nativePaths.systemdUnit = path.join(home, 'systemd', 'retrynaut.service')
+  nativePaths.xdgEntry = path.join(home, 'autostart', 'retrynaut.desktop')
+  await mkdir(path.dirname(nativePaths.xdgEntry), { recursive: true })
+  await writeFile(nativePaths.xdgEntry, '[Desktop Entry]\n')
+  await mkdir(path.dirname(nativePaths.runtimeFile), { recursive: true })
+  await writeFile(nativePaths.runtimeFile, '{}\n')
+  let control
+  control = await createControlServer(nativePaths, {
+    status: () => ({ pid: 4242, startedAt: 'now' }),
+    stop: () => {
+      setImmediate(() => control.close())
+      return { stopping: true }
+    },
+  })
+  context.after(() => control.close())
+
+  await stopService(nativePaths, 'linux')
+  const state = await serviceState(nativePaths, 'linux')
+
+  assert.equal(state.installed, true)
+  assert.equal(state.startupEnabled, false)
+  assert.equal(state.running, false)
+  await assert.rejects(access(nativePaths.xdgEntry), { code: 'ENOENT' })
+  await access(nativePaths.runtimeFile)
 })
 
 function testEnv(home) {

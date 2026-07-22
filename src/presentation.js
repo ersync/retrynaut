@@ -13,6 +13,7 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
     cliVersion,
     agent: {
       installed: state.installed,
+      startupEnabled: state.startupEnabled,
       running: state.running,
       pid: state.pid || null,
     },
@@ -23,17 +24,14 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
     config: {
       mode: controller?.mode || config.mode,
       maxClicksPerMinute: limit,
-      autoContinue: config.autoContinue,
       requireFocus: config.requireFocus,
     },
     activity: controller ? {
-      totalClicks: controller.totalClicks,
       retryClicks: controller.retryClicks,
-      continueClicks: controller.continueClicks,
       clicksLastMinute: controller.clicksLastMinute,
     } : null,
-    circuitBreaker: {
-      tripped,
+    retryLimit: {
+      reached: tripped,
       clicksLastMinute,
       limit,
     },
@@ -55,107 +53,90 @@ export function buildStatus({ config, controller, pageCount, paths, runtime, run
   }
 }
 
-export function printStatus(status, verbose) {
-  output.title('Retrynaut', status.cliVersion)
-  output.blank()
-  output.section('Agent')
+export function printStatus(status, verbose, printer = output) {
+  printer.title('Retrynaut', status.cliVersion)
+  printer.blank()
 
-  let agentState
-  if (!status.agent.installed) agentState = output.yellow('Not installed')
-  else if (status.agent.running) {
-    agentState = `${output.green('Running')} ${output.dim(`· pid ${status.agent.pid}`)}`
-  } else agentState = output.yellow('Stopped')
+  let automaticRetry
+  if (status.agent.running) automaticRetry = printer.green('On')
+  else if (status.agent.startupEnabled) automaticRetry = printer.red('Error')
+  else automaticRetry = printer.yellow('Off')
 
-  let connection
-  if (!status.agent.running) connection = output.dim('Inactive')
-  else if (status.antigravity.connected) connection = output.green('Connected')
-  else connection = output.yellow('Waiting')
-
-  const rows = [
-    ['Status', agentState],
-    ['Antigravity', connection],
-  ]
-  if (status.agent.installed) {
-    rows.push(
-      ['Mode', modeLabel(status.config.mode)],
-      ['Auto-continue', status.config.autoContinue ? output.green('Enabled') : 'Disabled'],
-      ['Circuit breaker', status.circuitBreaker.tripped
-        ? output.yellow('Cooling down')
-        : output.green(
-          `Ready · ${status.circuitBreaker.clicksLastMinute}/${status.circuitBreaker.limit} clicks in 60 sec`,
-        )],
+  const fields = [['Automatic retry', automaticRetry]]
+  if (status.agent.running) {
+    fields.push(
+      ['Antigravity', status.antigravity.connected
+        ? printer.green('Connected')
+        : printer.yellow('Waiting')],
+      ['Mode', sentenceCase(modeLabel(status.config.mode))],
     )
-  }
-  output.rows(rows)
-
-  if (status.activity) {
-    output.blank()
-    output.section('Activity — this session')
-    output.rows([
-      ['Retries', status.activity.retryClicks],
-      ['Continues', status.activity.continueClicks],
-      ['Last minute', `${status.activity.clicksLastMinute} of ${status.config.maxClicksPerMinute}`],
-    ])
-  }
-
-  if (status.installation) {
-    output.blank()
-    output.section('Installation')
-    const runtimeVersion = status.installation.version || output.yellow('Unknown')
-    const installRows = [
-      ['Runtime', runtimeVersion],
-      ['Installed', formatDate(status.installation.installedAt)],
-    ]
     if (verbose) {
-      installRows.push(
-        ['Node', status.installation.nodePath || 'Unknown'],
-        ['Runtime files', status.installation.runtimeDir],
-        ['Startup', status.installation.startup],
-      )
+      const session = status.activity ? `${status.activity.retryClicks} this session · ` : ''
+      fields.push([
+        'Retries',
+        `${session}${status.retryLimit.clicksLastMinute}/${status.retryLimit.limit} last minute`,
+      ])
     }
-    output.rows(installRows)
-    if (status.installation.error) output.warning(status.installation.error)
+    if (status.retryLimit.reached) fields.push(['Retry limit', printer.yellow('Cooling down')])
+  }
+  printer.fields(fields)
+
+  if (status.retryLimit.reached) {
+    printer.blank()
+    printer.warning('Retry limit reached. Retrying resumes automatically.')
+  } else if (!status.agent.installed) {
+    printer.blank()
+    printer.warning('Run `retrynaut install` to enable background retries.')
+  } else if (status.agent.startupEnabled && !status.agent.running) {
+    printer.blank()
+    printer.failure('Startup is enabled, but the background agent is not running.')
+  }
+
+  if (verbose && status.installation) {
+    printer.blank()
+    printer.section('Details')
+    printer.rows([
+      ['PID', status.agent.pid || 'none'],
+      ['Startup at sign-in', status.agent.startupEnabled ? 'enabled' : 'disabled'],
+      ['Antigravity pages', status.antigravity.pages],
+      ['Runtime', status.installation.version || 'unknown'],
+      ['Installed', formatDate(status.installation.installedAt)],
+      ['Node', status.installation.nodePath || 'unknown'],
+      ['Runtime files', status.installation.runtimeDir],
+      ['Startup', status.installation.startup],
+    ])
+    if (status.installation.error) printer.warning(status.installation.error)
   }
 
   if (verbose && status.diagnostics) {
-    output.blank()
-    output.section('Diagnostics')
-    output.rows([
+    printer.blank()
+    printer.section('Diagnostics')
+    printer.rows([
       ['Controller', status.diagnostics.controllerVersion],
-      ['Controller state', status.diagnostics.controllerRunning ? 'Running' : 'Stopped'],
+      ['Controller state', status.diagnostics.controllerRunning ? 'running' : 'stopped'],
       ['Scans', status.diagnostics.scanCount],
       ['Minimum interval', `${status.diagnostics.minimumClickIntervalMs} ms`],
       ['Lease until', formatDate(status.diagnostics.leaseUntil)],
     ])
   }
-
-  if (status.circuitBreaker.tripped) {
-    output.blank()
-    output.warning('Retry limit reached. Retrying resumes automatically.')
-  } else if (!status.agent.installed) {
-    output.blank()
-    output.warning('Run `retrynaut install` to enable background retries.')
-  } else if (!status.agent.running) {
-    output.blank()
-    output.warning('Run `retrynaut start` to resume background retries.')
-  } else if (!status.antigravity.connected) {
-    output.blank()
-    output.warning('Open Antigravity; Retrynaut will connect automatically.')
-  }
 }
 
 export function modeLabel(mode) {
   return {
-    'high-traffic-only': 'High traffic only',
-    'agent-errors': 'Agent errors',
-    all: 'All recognized errors',
+    'high-traffic-only': 'high traffic only',
+    'agent-errors': 'agent errors',
+    all: 'all recognized errors',
   }[mode] || mode
 }
 
+function sentenceCase(value) {
+  return value ? value[0].toUpperCase() + value.slice(1) : value
+}
+
 function formatDate(value) {
-  if (!value) return 'Unknown'
+  if (!value) return 'unknown'
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Unknown'
+  if (Number.isNaN(date.getTime())) return 'unknown'
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'medium',
     timeStyle: 'short',

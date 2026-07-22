@@ -10,7 +10,6 @@ test('default config is conservative and valid', () => {
   const config = defaultConfig()
   assert.equal(config.mode, 'high-traffic-only')
   assert.equal(config.maxRetriesPerMinute, 20)
-  assert.equal(config.autoContinue, false)
   assert.equal(validateConfig(config), config)
 })
 
@@ -26,7 +25,6 @@ test('loads config written by the native release', async (context) => {
   await writeFile(file, JSON.stringify({
     max_retries_per_minute: 18,
     mode: 'agent-errors',
-    auto_continue: true,
     require_focus: true,
     retry_delay_ms: 700,
     scan_interval_ms: 300,
@@ -34,7 +32,6 @@ test('loads config written by the native release', async (context) => {
   assert.deepEqual(await loadConfig(file), {
     maxRetriesPerMinute: 18,
     mode: 'agent-errors',
-    autoContinue: true,
     requireFocus: true,
     scanIntervalMs: 300,
   })

@@ -4,7 +4,6 @@ export function defaultConfig() {
   return {
     maxRetriesPerMinute: 20,
     mode: 'high-traffic-only',
-    autoContinue: false,
     requireFocus: false,
     scanIntervalMs: 250,
   }
@@ -40,7 +39,6 @@ export async function loadConfig(file) {
       ?? stored.max_retries_per_minute
       ?? defaults.maxRetriesPerMinute,
     mode: stored.mode ?? defaults.mode,
-    autoContinue: stored.autoContinue ?? stored.auto_continue ?? defaults.autoContinue,
     requireFocus: stored.requireFocus ?? stored.require_focus ?? defaults.requireFocus,
     scanIntervalMs: stored.scanIntervalMs ?? stored.scan_interval_ms ?? defaults.scanIntervalMs,
   }

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = 5
+  const VERSION = 6
   const CONFIG = __RETRYNAUT_CONFIG__
   const previous = globalThis.retrynaut
 
@@ -15,10 +15,6 @@
     { name: 'server error', regex: /server\s+error|internal\s+error|something\s+went\s+wrong/i },
     { name: 'rate limited', regex: /rate\s+limit(ed)?|too\s+many\s+requests/i },
     { name: 'connection error', regex: /connection\s+(error|lost|failed)|network\s+error/i },
-  ]
-  const continuePatterns = [
-    { name: 'context limit', regex: /context\s+(window|limit)|max\s+token|output\s+limit/i },
-    { name: 'agent paused', regex: /continue\s+(the\s+)?(task|agent|execution)|agent\s+paused/i },
   ]
   const activeRetryPatterns = CONFIG.mode === 'high-traffic-only'
     ? retryPatterns.filter((pattern) => pattern.name === 'high traffic')
@@ -52,9 +48,7 @@
   let stoppedByLease = false
   let stoppedByLimit = false
   let lastClickAt = recentClicks.at(-1) || 0
-  let totalClicks = 0
   let retryClicks = 0
-  let continueClicks = 0
   let scanCount = 0
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim()
@@ -134,11 +128,7 @@
       if (text === 'retry' || text === 'try again') {
         const pattern = matchContext(button, activeRetryPatterns)
           || matchSeparatedRetry(button, activeRetryPatterns)
-        if (pattern) return { button, pattern, kind: 'retry' }
-      }
-      if (CONFIG.autoContinue && text === 'continue') {
-        const pattern = matchContext(button, continuePatterns)
-        if (pattern) return { button, pattern, kind: 'continue' }
+        if (pattern) return { button, pattern }
       }
     }
     return null
@@ -159,11 +149,9 @@
     lastClickAt = now
     recentClicks.push(now)
     globalThis.__retrynautReportClick?.(String(now))
-    totalClicks += 1
-    if (action.kind === 'retry') retryClicks += 1
-    else continueClicks += 1
+    retryClicks += 1
     console.info(
-      `[Retrynaut] ${action.kind} #${totalClicks}`
+      `[Retrynaut] retry #${retryClicks}`
       + ` (${recentClicks.length}/${CONFIG.maxRetriesPerMinute} this minute, ${action.pattern.name}).`,
     )
     action.button.click()
@@ -171,9 +159,9 @@
     if (recentClicks.length >= CONFIG.maxRetriesPerMinute) {
       tripped = true
       console.warn(
-        `[Retrynaut] Circuit breaker tripped after ${recentClicks.length} clicks in 60 seconds.`,
+        `[Retrynaut] Retry limit reached after ${recentClicks.length} clicks in 60 seconds.`,
       )
-      stopController('circuit-breaker')
+      stopController('retry-limit')
     }
   }
 
@@ -188,7 +176,7 @@
 
   function stopController(reason) {
     stoppedByLease = reason === 'lease'
-    stoppedByLimit = reason === 'circuit-breaker'
+    stoppedByLimit = reason === 'retry-limit'
     running = false
     observer?.disconnect()
     observer = undefined
@@ -251,9 +239,7 @@
         running,
         tripped,
         mode: CONFIG.mode,
-        totalClicks,
         retryClicks,
-        continueClicks,
         clicksLastMinute: recentClicks.length,
         maxRetriesPerMinute: CONFIG.maxRetriesPerMinute,
         clicksRemaining: tripped

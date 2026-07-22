@@ -35,3 +35,11 @@ export async function loadRuntime(paths) {
     throw error
   }
 }
+
+export async function removeRuntime(paths) {
+  await rm(paths.runtimeDir, { recursive: true, force: true })
+  await rm(paths.runtimeFile, { force: true })
+  await rm(paths.pidFile, { force: true })
+  await rm(paths.controlKeyFile, { force: true })
+  if (process.platform !== 'win32') await rm(paths.controlEndpoint, { force: true })
+}

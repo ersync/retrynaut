@@ -117,7 +117,7 @@ test('trips at the rolling click limit and resumes after the window clears', () 
   assert.equal(page.context.retrynaut.status().tripped, false)
 })
 
-test('carries a tripped circuit breaker into a fresh context', () => {
+test('carries a reached retry limit into a fresh context', () => {
   const seededButton = actionButton('Retry', 'High traffic Retry')
   const seeded = runPage([seededButton], {
     maxRetriesPerMinute: 3,

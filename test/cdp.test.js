@@ -21,7 +21,7 @@ test('accepts only local Antigravity page targets', () => {
   }), false)
 })
 
-test('releases the click breaker when its rolling window clears', () => {
+test('releases the retry limit when its rolling window clears', () => {
   const now = Date.now()
   const budget = createClickBudget(3)
   budget.record(now - 2)

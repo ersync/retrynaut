@@ -36,7 +36,7 @@ export async function runDaemon({ paths, configFile, portFile, verbose = false }
       },
     })
 
-    logger.log(`starting (mode=${config.mode}, breaker=${config.maxRetriesPerMinute}/60s)`)
+    logger.log(`starting (mode=${config.mode}, limit=${config.maxRetriesPerMinute}/60s)`)
     await runController({
       findPort: () => findPort(portFile),
       script,

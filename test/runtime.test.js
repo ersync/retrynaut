@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import { appPaths } from '../src/paths.js'
-import { installRuntime, loadRuntime } from '../src/runtime.js'
+import { installRuntime, loadRuntime, removeRuntime } from '../src/runtime.js'
 
 const sourcePackage = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 
@@ -25,6 +25,22 @@ test('copies a stable runtime out of the npm package', async (context) => {
     await readFile(path.join(paths.runtimeDir, 'package.json'), 'utf8'),
   )
   assert.equal(installedPackage.version, sourcePackage.version)
+})
+
+test('removes the runtime without deleting config or logs', async (context) => {
+  const home = await mkdtemp(path.join(os.tmpdir(), 'retrynaut-remove-runtime-'))
+  context.after(() => rm(home, { recursive: true, force: true }))
+  const paths = appPaths({ platform: process.platform, home, env: testEnv(home) })
+  await installRuntime(paths, '/usr/bin/node')
+  await writeFile(paths.configFile, '{}\n')
+  await writeFile(paths.logFile, 'log\n')
+
+  await removeRuntime(paths)
+
+  await assert.rejects(access(paths.runtimeDir), { code: 'ENOENT' })
+  await assert.rejects(access(paths.runtimeFile), { code: 'ENOENT' })
+  await access(paths.configFile)
+  await access(paths.logFile)
 })
 
 function testEnv(home) {

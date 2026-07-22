@@ -25,20 +25,17 @@ export function createPrinter(stream, env = process.env) {
         write(`  ${this.dim(label.padEnd(width))}  ${value}`)
       }
     },
-    checks(entries) {
+    fields(entries) {
       const width = Math.max(0, ...entries.map(([label]) => label.length))
       for (const [label, value] of entries) {
-        write(`  ${this.green('✓')} ${label.padEnd(width)}  ${value}`)
+        write(`${label.padEnd(width)}  ${value}`)
       }
-    },
-    success(message) {
-      write(`${this.green('✓')} ${this.bold(message)}`)
     },
     warning(message) {
       write(`${this.yellow('!')} ${message}`)
     },
     failure(message) {
-      write(`${this.red('✗')} ${message}`)
+      write(this.red(message))
     },
   }
   return printer

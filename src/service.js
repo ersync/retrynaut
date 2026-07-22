@@ -18,25 +18,18 @@ export async function installService(paths, runtime, platform = process.platform
 
 export async function startService(paths, platform = process.platform) {
   const current = await serviceState(paths, platform)
-  if (current.running) return current
+  if (current.running && current.startupEnabled) return current
 
   const runtime = await readRuntime(paths)
-  if (platform === 'darwin') {
-    run('launchctl', ['bootstrap', launchDomain(), paths.registration])
-    run('launchctl', ['kickstart', '-k', `${launchDomain()}/${launchLabel}`])
-  } else if (platform === 'win32') {
-    run('schtasks.exe', ['/Run', '/TN', windowsTask])
-  } else if (await fileExists(paths.systemdUnit) && systemdAvailable()) {
-    run('systemctl', ['--user', 'start', 'retrynaut.service'])
-  } else if (await fileExists(paths.xdgEntry)) {
-    startDetached(paths, runtime)
-  } else {
-    throw new Error('Retrynaut is not installed')
-  }
-  return waitForAgent(paths, platform)
+  return installService(paths, runtime, platform)
 }
 
 export async function stopService(paths, platform = process.platform) {
+  await removeService(paths, platform)
+  return serviceState(paths, platform)
+}
+
+async function stopRunningService(paths, platform) {
   if (platform === 'darwin') {
     runQuiet('launchctl', ['bootout', `${launchDomain()}/${launchLabel}`])
   } else if (platform === 'win32') {
@@ -51,7 +44,7 @@ export async function stopService(paths, platform = process.platform) {
 }
 
 export async function removeService(paths, platform = process.platform) {
-  await stopService(paths, platform)
+  await stopRunningService(paths, platform)
   if (platform === 'darwin') {
     await rm(paths.registration, { force: true })
   } else if (platform === 'win32') {
@@ -66,17 +59,19 @@ export async function removeService(paths, platform = process.platform) {
 }
 
 export async function serviceState(paths, platform = process.platform) {
-  let installed = false
+  let startupEnabled = false
   if (platform === 'darwin') {
-    installed = await fileExists(paths.registration)
+    startupEnabled = await fileExists(paths.registration)
   } else if (platform === 'win32') {
-    installed = commandOk('schtasks.exe', ['/Query', '/TN', windowsTask])
+    startupEnabled = commandOk('schtasks.exe', ['/Query', '/TN', windowsTask])
   } else {
-    installed = await fileExists(paths.systemdUnit) || await fileExists(paths.xdgEntry)
+    startupEnabled = await fileExists(paths.systemdUnit) || await fileExists(paths.xdgEntry)
   }
+  const installed = startupEnabled || await fileExists(paths.runtimeFile)
   const agent = await agentStatus(paths)
   return {
     installed,
+    startupEnabled,
     running: Boolean(agent),
     pid: agent?.pid,
     startedAt: agent?.startedAt,

@@ -33,16 +33,18 @@ npx -y retrynaut@latest install
 ## Commands
 
 ```bash
-retrynaut status              # check agent status (--verbose or --json)
-retrynaut start                # start the agent
-retrynaut stop                 # stop the agent (autostart stays enabled)
-retrynaut uninstall --purge    # remove background service, logs, config
+retrynaut status              # check whether automatic retry is on
+retrynaut start                # turn automatic retry on
+retrynaut stop                 # turn automatic retry off
+retrynaut uninstall            # remove the background agent and runtime
+retrynaut uninstall --purge    # also remove configuration and logs
 npm uninstall -g retrynaut     # remove the global CLI
 ```
 
 ## Configuration
 
-Changes automatically restart the installed agent.
+When automatic retry is running, configuration changes apply immediately. If it
+is stopped, the new settings apply the next time you start it.
 
 ```bash
 retrynaut doctor                          # test the connection without clicking anything
