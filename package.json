@@ -1,6 +1,6 @@
 {
   "name": "retrynaut",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Automatic retry companion for the Antigravity desktop app",
   "type": "module",
   "bin": {
